@@ -1,0 +1,8 @@
+# Android build artifacts
+**/bin/*.apk
+**/bin/*.aab
+**/.buildozer/
+
+# Python cache
+**/__pycache__/
+**/*.pyc
