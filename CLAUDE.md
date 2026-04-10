@@ -1,4 +1,24 @@
-# Your Task
+# CineQueue App Notes
+
+## Emoji & Icon Rendering — CRITICAL
+
+**Do NOT use NotoEmoji or any color emoji font.** See `/workspace/CLAUDE.md` for the full explanation.
+
+- The `E()` helper and `[font=NotoEmoji]` markup must not be used
+- Use plain BMP Unicode symbols instead: ▶ (play), ■ (stop), ↺ (refresh), ● (status dot)
+- Strip all emoji from Button text and SectionLabel text — use plain ASCII/Latin
+
+## v2 Feature Notes
+
+- SVC rows: ▶ (green) = start, ■ (red) = stop, ↺ (blue) = individual refresh per service
+- "Refresh All" button (↺ Refresh All) triggers full status poll for all three services
+- "Watch on Plex" opens `{plex_url}/web/index.html` via `webbrowser.open()`
+- Watch progress section shows three separate bars: Letterboxd, Plex, Aggregated
+- Overlap = titles tagged `on_lb=True` in `_plex_movies` (set by `_find_intersection`)
+
+---
+
+# Original Task
 Immediately create a Kivy Android app for: a movie watching app that Helps me pick which movies I should watch by going through my letterboxd watchlist and my Plex Media server. 
 
 In the Watch now section: Present tiles of the posters of the movies. At first only present the movies that are on my Plex server.

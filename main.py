@@ -3,7 +3,7 @@ CineQueue — Movie Picker App
 Plex + Letterboxd integration with real API connections
 """
 
-import random, json, os, re, ssl, threading, socket
+import random, json, os, re, ssl, threading, socket, webbrowser
 import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -1247,7 +1247,7 @@ class WatchScreen(Screen):
                       color=ACCENT, size_hint_x=0.6, halign='left',
                       valign='middle')
         title.bind(size=lambda w, s: setattr(w, 'text_size', s))
-        plex_dot = Label(text=f"{E('🔵')} PLEX", markup=True,
+        plex_dot = Label(text="● PLEX",
                          font_size=dp(10), color=GREEN,
                          size_hint_x=0.4, halign='right', valign='middle')
         plex_dot.bind(size=lambda w, s: setattr(w, 'text_size', s))
@@ -1301,7 +1301,7 @@ class WatchScreen(Screen):
         inner.add_widget(sort_row)
 
         # Watch Now
-        inner.add_widget(SectionLabel(text=f"{E('🎬')} WATCH NOW  (on Plex)"))
+        inner.add_widget(SectionLabel(text="WATCH NOW  (on Plex)"))
         self._watch_container = BoxLayout(orientation='horizontal',
                                           size_hint=(None, None),
                                           height=dp(210), width=dp(360),
@@ -1312,7 +1312,7 @@ class WatchScreen(Screen):
         inner.add_widget(ws)
 
         # Recommended
-        inner.add_widget(SectionLabel(text=f"{E('⭐')} RECOMMENDED  (Plex + Letterboxd)"))
+        inner.add_widget(SectionLabel(text="RECOMMENDED  (Plex + Letterboxd)"))
         self._rec_container = BoxLayout(orientation='horizontal',
                                         size_hint=(None, None),
                                         height=dp(210), width=dp(360),
@@ -1341,7 +1341,7 @@ class WatchScreen(Screen):
             font_size=dp(10), color=SUBTEXT, size_hint_y=None, height=dp(36),
             halign='left', valign='top')
         dl_sub.bind(size=lambda w, s: setattr(w, 'text_size', s))
-        dl_btn = Button(text="⬇ Download  (Coming Soon)", font_size=dp(11),
+        dl_btn = Button(text="Download  (Coming Soon)", font_size=dp(11),
                         background_normal="", background_color=(0.3, 0.3, 0.4, 1),
                         color=SUBTEXT, size_hint_y=None, height=dp(30), disabled=True)
         dl_box.add_widget(dl_lbl)
@@ -1459,7 +1459,7 @@ class WatchScreen(Screen):
             f"[b]{movie['title']}[/b] ({movie['year']})",
             f"Director: {movie.get('director','N/A')}",
             f"Genre: {movie.get('genre','?')}  |  Country: {movie.get('country','?')}",
-            f"Rating: {E('⭐')} {movie['rating']}  |  Runtime: {movie.get('runtime','?')} min",
+            f"Rating: {movie['rating']}  |  Runtime: {movie.get('runtime','?')} min",
         ]:
             lbl = Label(text=line, markup=True, font_size=dp(12), color=TEXT,
                         halign='left', valign='middle',
@@ -1467,7 +1467,7 @@ class WatchScreen(Screen):
             lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
             content.add_widget(lbl)
 
-        watch_btn = Button(text=f"{E('🎬')} Watch on Plex", markup=True,
+        watch_btn = Button(text="▶  Watch on Plex",
                            size_hint_y=None, height=dp(40),
                            background_normal="", background_color=GREEN,
                            color=TEXT, font_size=dp(13), bold=True)
@@ -1480,7 +1480,14 @@ class WatchScreen(Screen):
         popup = Popup(title=movie['title'], content=content,
                       size_hint=(0.9, 0.75),
                       background_color=(0.10, 0.10, 0.14, 1), title_color=TEXT)
-        watch_btn.bind(on_press=lambda *_: popup.dismiss())
+
+        def _open_plex(btn, m=movie):
+            plex_url = Settings.get('plex_url', '').rstrip('/')
+            if plex_url:
+                webbrowser.open(plex_url + '/web/index.html')
+            popup.dismiss()
+
+        watch_btn.bind(on_press=_open_plex)
         close_btn.bind(on_press=popup.dismiss)
         popup.open()
 
@@ -1815,18 +1822,57 @@ class AnalyticsScreen(Screen):
             year_row.add_widget(card)
         inner.add_widget(year_row)
 
-        inner.add_widget(SectionLabel(
-            text=f"WATCH PROGRESS  ({pct}% complete)"))
-        prog = Widget(size_hint_y=None, height=dp(20))
-        with prog.canvas:
-            Color(*CARD)
-            RoundedRectangle(pos=prog.pos, size=(prog.width, dp(14)),
-                             radius=[dp(7)])
-            Color(*GREEN)
-            RoundedRectangle(pos=prog.pos,
-                             size=(prog.width * pct / 100, dp(14)),
-                             radius=[dp(7)])
-        inner.add_widget(prog)
+        # ── Watch Progress ────────────────────────────────────────────────────
+        lb_watchlist_total = len(_lb_movies)
+        lb_watched_count   = _lb_stats.get('total_films', total_w)
+        lb_pct = int(lb_watched_count / (lb_watched_count + lb_watchlist_total) * 100) \
+                 if (lb_watched_count + lb_watchlist_total) else 0
+
+        plex_total   = len(_plex_movies)
+        plex_watched = sum(1 for e in MOCK_WATCHED
+                           if any(m['title'] == e['title'] for m in _plex_movies))
+        plex_pct = int(plex_watched / (plex_watched + plex_total) * 100) \
+                   if (plex_watched + plex_total) else 0
+
+        overlap      = sum(1 for m in _plex_movies if m.get('on_lb'))
+        agg_total    = total_w + total_uw
+        agg_pct      = int(total_w / agg_total * 100) if agg_total else 0
+
+        inner.add_widget(SectionLabel(text="WATCH PROGRESS"))
+
+        for bar_label, bar_pct, bar_color in [
+            (f"Letterboxd  ({lb_pct}%)",   lb_pct,  ACCENT2),
+            (f"Plex  ({plex_pct}%)",        plex_pct, GREEN),
+            (f"Aggregated  ({agg_pct}%)",   agg_pct, GOLD),
+        ]:
+            lbl = Label(text=bar_label, font_size=dp(10), color=SUBTEXT,
+                        size_hint_y=None, height=dp(16), halign='left', valign='middle')
+            lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
+            inner.add_widget(lbl)
+            prog_box = BoxLayout(size_hint_y=None, height=dp(14))
+            with prog_box.canvas.before:
+                Color(*CARD)
+                RoundedRectangle(pos=prog_box.pos, size=prog_box.size, radius=[dp(7)])
+            prog_box.bind(pos=lambda w, _: self._upd_prog(w),
+                          size=lambda w, _: self._upd_prog(w))
+            fill = BoxLayout(size_hint=(max(bar_pct, 1) / 100, 1))
+            fill._fill_color = bar_color
+            with fill.canvas.before:
+                Color(*bar_color)
+                RoundedRectangle(pos=fill.pos, size=fill.size, radius=[dp(7)])
+            fill.bind(pos=lambda w, _: self._upd_fill(w),
+                      size=lambda w, _: self._upd_fill(w))
+            prog_box.add_widget(fill)
+            if bar_pct < 100:
+                prog_box.add_widget(Widget(size_hint_x=(100 - bar_pct) / 100))
+            inner.add_widget(prog_box)
+
+        overlap_lbl = Label(
+            text=f"● {overlap} titles on both Plex and Letterboxd watchlist",
+            font_size=dp(10), color=GOLD,
+            size_hint_y=None, height=dp(20), halign='left', valign='middle')
+        overlap_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
+        inner.add_widget(overlap_lbl)
 
         inner.add_widget(SectionLabel(text="GENRE BREAKDOWN"))
         genres = {}
@@ -1882,8 +1928,8 @@ class AnalyticsScreen(Screen):
         avg_rt   = sum(runtimes) // len(runtimes) if runtimes else 0
 
         for text, color in [
-            (f"{E('⭐')} Avg Rating: {avg_r:.1f} / 10", GOLD),
-            (f"{E('🕐')} Avg Runtime: {avg_rt} min  ({avg_rt//60}h {avg_rt%60}m)", ACCENT2),
+            (f"Avg Rating: {avg_r:.1f} / 10", GOLD),
+            (f"Avg Runtime: {avg_rt} min  ({avg_rt//60}h {avg_rt%60}m)", ACCENT2),
         ]:
             lbl = Label(text=text, markup=True, font_size=dp(13), color=color,
                         size_hint_y=None, height=dp(30),
@@ -1894,6 +1940,19 @@ class AnalyticsScreen(Screen):
         scroll.add_widget(inner)
         root.add_widget(scroll)
         self.add_widget(root)
+
+    def _upd_prog(self, w):
+        w.canvas.before.clear()
+        with w.canvas.before:
+            Color(*CARD)
+            RoundedRectangle(pos=w.pos, size=w.size, radius=[dp(7)])
+
+    def _upd_fill(self, w):
+        w.canvas.before.clear()
+        # Inherit color from the fill widget's stored color (set at creation)
+        with w.canvas.before:
+            Color(*getattr(w, '_fill_color', GREEN))
+            RoundedRectangle(pos=w.pos, size=w.size, radius=[dp(7)])
 
     def _redraw(self, w):
         w.canvas.before.clear()
@@ -1990,35 +2049,41 @@ class SettingsScreen(Screen):
         for svc_key, svc_label in [('plex',      'Plex Media Server'),
                                     ('qbit_proj', 'VPN + qBittorrent'),
                                     ('arr_proj',  'Prowlarr / Sonarr / Radarr')]:
-            row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
-            name_lbl = Label(text=svc_label, font_size=dp(11), color=TEXT,
-                             size_hint_x=0.32, halign='left', valign='middle')
+            row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(4))
+            name_lbl = Label(text=svc_label, font_size=dp(10), color=TEXT,
+                             size_hint_x=0.30, halign='left', valign='middle')
             name_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
-            status_lbl = Label(text="●  unknown", font_size=dp(10), color=SUBTEXT,
+            status_lbl = Label(text="● unknown", font_size=dp(9), color=SUBTEXT,
                                size_hint_x=0.28, halign='left', valign='middle')
             status_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
-            start_b = Button(text="Start", font_size=dp(10),
-                             size_hint_x=0.2, background_normal="",
-                             background_color=GREEN, color=TEXT)
-            stop_b  = Button(text="Stop",  font_size=dp(10),
-                             size_hint_x=0.2, background_normal="",
-                             background_color=ACCENT, color=TEXT)
+            # ▶ play (green), ■ stop (red), ↺ refresh (blue) — all plain BMP symbols
+            play_b = Button(text="▶", font_size=dp(14),
+                            size_hint_x=None, width=dp(36),
+                            background_normal="", background_color=GREEN, color=TEXT)
+            stop_b = Button(text="■", font_size=dp(14),
+                            size_hint_x=None, width=dp(36),
+                            background_normal="", background_color=ACCENT, color=TEXT)
+            ref_b  = Button(text="↺", font_size=dp(14),
+                            size_hint_x=None, width=dp(36),
+                            background_normal="", background_color=CARD, color=ACCENT2)
             _key = svc_key
-            start_b.bind(on_press=lambda *_, k=_key: self._svc_action(k, 'start'))
-            stop_b.bind( on_press=lambda *_, k=_key: self._svc_action(k, 'stop'))
+            play_b.bind(on_press=lambda *_, k=_key: self._svc_action(k, 'start'))
+            stop_b.bind(on_press=lambda *_, k=_key: self._svc_action(k, 'stop'))
+            ref_b.bind( on_press=lambda *_, k=_key: self._refresh_svc_status_single(k))
             row.add_widget(name_lbl)
             row.add_widget(status_lbl)
-            row.add_widget(start_b)
+            row.add_widget(play_b)
             row.add_widget(stop_b)
+            row.add_widget(ref_b)
             inner.add_widget(row)
             self._svc_rows[svc_key] = {'status_lbl': status_lbl}
 
-        refresh_btn = Button(text="Refresh Status", font_size=dp(11),
-                             size_hint_y=None, height=dp(36),
-                             background_normal="", background_color=CARD,
-                             color=ACCENT2)
-        refresh_btn.bind(on_press=lambda *_: self._refresh_svc_status())
-        inner.add_widget(refresh_btn)
+        refresh_all_btn = Button(text="↺  Refresh All", font_size=dp(11),
+                                 size_hint_y=None, height=dp(36),
+                                 background_normal="", background_color=CARD,
+                                 color=ACCENT2)
+        refresh_all_btn.bind(on_press=lambda *_: self._refresh_svc_status())
+        inner.add_widget(refresh_all_btn)
 
         self._svc_status_lbl = Label(
             text="", font_size=dp(10), color=SUBTEXT,
@@ -2026,7 +2091,7 @@ class SettingsScreen(Screen):
         self._svc_status_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
         inner.add_widget(self._svc_status_lbl)
 
-        save_btn = Button(text=f"{E('💾')} Save & Connect", markup=True,
+        save_btn = Button(text="Save & Connect",
                           size_hint_y=None, height=dp(48),
                           background_normal="", background_color=ACCENT2,
                           color=TEXT, font_size=dp(14), bold=True)
@@ -2087,11 +2152,19 @@ class SettingsScreen(Screen):
         def on_done(result):
             success = result.get('success', False)
             if success:
-                self._set_svc_status(key, "● running" if action == 'start' else "● stopped",
-                                     GREEN if action == 'start' else SUBTEXT)
+                self._set_svc_status(key, '● running' if action == 'start' else '● stopped',
+                                    GREEN if action == 'start' else SUBTEXT)
             else:
-                err_code = result.get('error', {}).get('code', '?')
-                self._set_svc_status(key, f"● error {err_code}", ACCENT)
+                code = result.get('error', {}).get('code', '?')
+                if code == 2104:
+                    self._set_svc_status(key, '● build failed', ACCENT)
+                    Clock.schedule_once(lambda dt: setattr(
+                        self._svc_status_lbl, 'text',
+                        'Fix in DSM → Container Manager → Project'), 0)
+                    Clock.schedule_once(lambda dt: setattr(
+                        self._svc_status_lbl, 'color', GOLD), 0)
+                else:
+                    self._set_svc_status(key, f'● error {code}', ACCENT)
 
         def on_error(e):
             msg = "● timed out" if 'timed out' in str(e).lower() or 'timeout' in str(e).lower() else "● error"
@@ -2154,6 +2227,39 @@ class SettingsScreen(Screen):
                             setattr(self._svc_status_lbl, 'color', ACCENT)), 0)
 
         threading.Thread(target=check_all, daemon=True).start()
+
+    def _refresh_svc_status_single(self, key):
+        client, err = self._make_syno_client()
+        if not client:
+            self._svc_status_lbl.text  = err
+            self._svc_status_lbl.color = ACCENT
+            return
+        self._set_svc_status(key, "● checking…", GOLD)
+
+        def check_one():
+            try:
+                if key == 'plex':
+                    status = client.plex_status()
+                    color  = GREEN if 'running' in status.lower() else SUBTEXT
+                    Clock.schedule_once(lambda dt, s=status, c=color:
+                        self._set_svc_status('plex', f"● {s}", c), 0)
+                else:
+                    proj_name = (Settings.get('qbit_project') or 'qbittorrent-gluetun') \
+                                if key == 'qbit_proj' else \
+                                (Settings.get('arr_project') or 'arr-apps')
+                    projects = client._list_projects()
+                    nas_ip   = client._nas_ip
+                    status   = client.project_status_from_list(proj_name, projects, nas_ip=nas_ip)
+                    color    = GREEN if status == 'running' else (
+                               GOLD  if status.startswith('partial') else SUBTEXT)
+                    short    = status if len(status) <= 18 else status[:18] + '…'
+                    Clock.schedule_once(lambda dt, k=key, s=short, c=color:
+                        self._set_svc_status(k, f"● {s}", c), 0)
+            except Exception as e:
+                Clock.schedule_once(lambda dt, k=key:
+                    self._set_svc_status(k, '● error', ACCENT), 0)
+
+        threading.Thread(target=check_one, daemon=True).start()
 
     def _save(self, *_):
         data = {key: inp.text.strip() for key, inp in self._inputs.items()}
