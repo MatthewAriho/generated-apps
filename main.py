@@ -118,10 +118,11 @@ MOCK_WATCHED = [
 ]
 
 # ── Live Data Store ───────────────────────────────────────────────────────────
-_plex_movies = list(MOCK_PLEX)
-_lb_movies   = list(MOCK_LB)
-_lb_stats    = {}   # scraped from Letterboxd profile: total_films, watched_this_year
-_refresh_cbs = []
+_plex_movies    = list(MOCK_PLEX)
+_lb_movies      = list(MOCK_LB)
+_lb_stats       = {}   # scraped from Letterboxd profile: total_films, watched_this_year
+_refresh_cbs    = []
+_download_queue = []   # list of DownloadEntry dicts (persisted to cinequeue_downloads.json)
 
 def _notify_refresh():
     for cb in list(_refresh_cbs):
@@ -723,6 +724,368 @@ def syno_action_async(action_fn, on_done, on_error):
             Clock.schedule_once(lambda dt: on_error(str(exc)), 0)
     threading.Thread(target=run, daemon=True).start()
 
+# ── Prowlarr Client ───────────────────────────────────────────────────────────
+class ProwlarrClient:
+    """REST client for Prowlarr API v1.
+    Prowlarr acts as a unified indexer proxy — it aggregates torrent/NZB indexers
+    and exposes a single search API. We use it to find releases for movies.
+
+    Future ideas:
+    - Store preferred quality profile (1080p BluRay > WEB-DL > 720p)
+    - Respect per-indexer rate limits
+    - Cache search results so re-queuing doesn't re-search
+    - Support NZB (Usenet) alongside torrents
+    """
+    CATEGORIES_MOVIE = [2000, 2010, 2020, 2030, 2040, 2045, 2050, 2060]
+
+    def __init__(self, base_url, api_key):
+        self._base = base_url.rstrip('/')
+        self._key  = api_key
+
+    def _get(self, path, params=None, timeout=15):
+        qs = urllib.parse.urlencode(params or {})
+        url = f"{self._base}{path}?{qs}" if qs else f"{self._base}{path}"
+        req = urllib.request.Request(url, headers={'X-Api-Key': self._key})
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with urllib.request.urlopen(req, context=ctx, timeout=timeout) as r:
+            return json.loads(r.read().decode())
+
+    def search(self, title, year=None):
+        """Search all indexers for a movie. Returns list of release dicts."""
+        query = f"{title} {year}" if year else title
+        cats  = ','.join(str(c) for c in self.CATEGORIES_MOVIE)
+        try:
+            results = self._get('/api/v1/search', {
+                'query': query, 'type': 'search',
+                'indexerIds': '-1', 'categories': cats,
+            })
+            return results if isinstance(results, list) else []
+        except Exception as e:
+            raise RuntimeError(f"Prowlarr search failed: {e}")
+
+    def best_release(self, results):
+        """Pick best release: prefer 1080p, then most seeders.
+        Future: configurable quality profiles, size caps, trusted indexers."""
+        if not results:
+            return None
+        def score(r):
+            title = (r.get('title') or '').lower()
+            q = 3 if '1080p' in title else (2 if '720p' in title else 1)
+            if '4k' in title or '2160p' in title:
+                q = 4
+            seeders = r.get('seeders') or 0
+            return (q * 1000) + seeders
+        ranked = sorted(results, key=score, reverse=True)
+        # Filter out releases with no download URL
+        for r in ranked:
+            if r.get('downloadUrl') or r.get('magnetUrl') or r.get('infoUrl'):
+                return r
+        return ranked[0] if ranked else None
+
+    def grab(self, release):
+        """Tell Prowlarr to send this release to the configured download client.
+        Prowlarr will forward to qBittorrent/SABnzbd as configured in its settings."""
+        guid       = release.get('guid', '')
+        indexer_id = release.get('indexerId', 0)
+        data       = json.dumps({'guid': guid, 'indexerId': indexer_id}).encode()
+        url        = f"{self._base}/api/v1/search"
+        req = urllib.request.Request(url, data=data, method='POST',
+                                     headers={'X-Api-Key': self._key,
+                                              'Content-Type': 'application/json'})
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
+            return json.loads(r.read().decode())
+
+
+# ── qBittorrent Client ────────────────────────────────────────────────────────
+class QBitClient:
+    """REST client for qBittorrent Web API v2.
+    Used to track download progress once Prowlarr has sent a release.
+
+    Future ideas:
+    - Auto-move completed downloads to a /movies folder
+    - Trigger Plex library scan via PlexClient on completion
+    - Pause/resume individual downloads from the Downloads tab
+    - Show per-file progress for multi-file torrents
+    - Support categories so downloads land in the right Plex library path
+    """
+    def __init__(self, base_url, username='admin', password='adminadmin'):
+        self._base = base_url.rstrip('/')
+        self._user = username
+        self._pass = password
+        self._sid  = None   # session cookie (SID)
+
+    def _ctx(self):
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+
+    def login(self):
+        data = urllib.parse.urlencode({'username': self._user,
+                                       'password': self._pass}).encode()
+        req = urllib.request.Request(f"{self._base}/api/v2/auth/login",
+                                     data=data, method='POST')
+        with urllib.request.urlopen(req, context=self._ctx(), timeout=10) as r:
+            cookie = r.headers.get('Set-Cookie', '')
+            for part in cookie.split(';'):
+                if part.strip().startswith('SID='):
+                    self._sid = part.strip()[4:]
+            return r.read().decode().strip() == 'Ok.'
+
+    def _get(self, path, params=None, timeout=10):
+        qs  = urllib.parse.urlencode(params or {})
+        url = f"{self._base}{path}?{qs}" if qs else f"{self._base}{path}"
+        headers = {'Cookie': f'SID={self._sid}'} if self._sid else {}
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, context=self._ctx(), timeout=timeout) as r:
+            return json.loads(r.read().decode())
+
+    def get_torrents(self, hashes=None):
+        """Return list of torrent info dicts. Optionally filter by hash list."""
+        params = {}
+        if hashes:
+            params['hashes'] = '|'.join(hashes)
+        return self._get('/api/v2/torrents/info', params)
+
+    def torrent_by_hash(self, h):
+        """Return info for a single torrent, or None if not found."""
+        results = self.get_torrents(hashes=[h])
+        return results[0] if results else None
+
+    def add_magnet(self, magnet_url, save_path=None):
+        """Add a magnet link. Returns True on success."""
+        fields = {'urls': magnet_url}
+        if save_path:
+            fields['savepath'] = save_path
+        data = urllib.parse.urlencode(fields).encode()
+        headers = {'Cookie': f'SID={self._sid}'} if self._sid else {}
+        headers['Content-Type'] = 'application/x-www-form-urlencoded'
+        req = urllib.request.Request(f"{self._base}/api/v2/torrents/add",
+                                     data=data, method='POST', headers=headers)
+        with urllib.request.urlopen(req, context=self._ctx(), timeout=10) as r:
+            return r.read().decode().strip() == 'Ok.'
+
+
+# ── Download Queue ────────────────────────────────────────────────────────────
+class DownloadQueue:
+    """Persistent download queue stored in cinequeue_downloads.json.
+
+    Each entry dict:
+      id           — unique string (title+year slug)
+      title        — movie title
+      year         — release year
+      genre        — genre string
+      director     — director
+      poster_url   — URL for poster image
+      poster_color — fallback color tuple
+      added_at     — ISO timestamp when queued
+      status       — queued | searching | results_found | no_results |
+                     grabbing | downloading | complete | failed
+      results      — list of Prowlarr release dicts (populated after search)
+      chosen       — chosen release dict (after auto-pick)
+      qbit_hash    — torrent hash string (after grab)
+      progress     — 0.0–1.0 download progress
+      qbit_status  — raw qBit state string (downloading, seeding, paused, etc.)
+      eta_secs     — estimated seconds remaining
+      size_bytes   — total file size
+      error        — error message if failed
+
+    Future ideas (not yet implemented):
+    - quality_profile: per-entry quality preference (1080p, 4K, 720p)
+    - subtitle_lang: auto-search subtitles on complete
+    - auto_refresh_plex: trigger Plex scan when status → complete
+    - retry_count: track retry attempts for failed entries
+    - preferred_indexer: whitelist trusted indexers per user
+    - download_path: custom save path per movie
+    - tags: user-defined tags for grouping downloads
+    - notification_sent: track if a completion notification was shown
+    """
+    _FILE = 'cinequeue_downloads.json'
+
+    @staticmethod
+    def _path():
+        d = os.path.dirname(os.path.abspath(__file__))
+        return os.path.join(d, DownloadQueue._FILE)
+
+    @staticmethod
+    def load():
+        global _download_queue
+        try:
+            with open(DownloadQueue._path(), 'r') as f:
+                _download_queue = json.load(f)
+        except Exception:
+            _download_queue = []
+
+    @staticmethod
+    def save():
+        try:
+            with open(DownloadQueue._path(), 'w') as f:
+                json.dump(_download_queue, f, indent=2)
+        except Exception:
+            pass
+
+    @staticmethod
+    def add(movie):
+        """Add a movie to the queue. Deduplicates by title+year."""
+        global _download_queue
+        entry_id = re.sub(r'[^a-z0-9]', '_',
+                          f"{movie['title']}_{movie.get('year','')}".lower())
+        if any(e['id'] == entry_id for e in _download_queue):
+            return None  # already queued
+        entry = {
+            'id':           entry_id,
+            'title':        movie['title'],
+            'year':         movie.get('year', ''),
+            'genre':        movie.get('genre', ''),
+            'director':     movie.get('director', ''),
+            'poster_url':   movie.get('poster_url', ''),
+            'poster_color': list(movie.get('poster_color', list(CARD))),
+            'added_at':     datetime.now().strftime('%Y-%m-%d %H:%M'),
+            'status':       'queued',
+            'results':      [],
+            'chosen':       None,
+            'qbit_hash':    None,
+            'progress':     0.0,
+            'qbit_status':  '',
+            'eta_secs':     -1,
+            'size_bytes':   0,
+            'error':        '',
+        }
+        _download_queue.append(entry)
+        DownloadQueue.save()
+        return entry
+
+    @staticmethod
+    def update(entry_id, **kwargs):
+        global _download_queue
+        for e in _download_queue:
+            if e['id'] == entry_id:
+                e.update(kwargs)
+                DownloadQueue.save()
+                return e
+        return None
+
+    @staticmethod
+    def remove(entry_id):
+        global _download_queue
+        _download_queue = [e for e in _download_queue if e['id'] != entry_id]
+        DownloadQueue.save()
+
+    @staticmethod
+    def search_and_grab(entry_id, on_update):
+        """Background: Prowlarr search → auto-pick best → grab.
+        on_update(entry) called on main thread after each state change."""
+        prowlarr_url = Settings.get('prowlarr_url', '')
+        prowlarr_key = Settings.get('prowlarr_api_key', '')
+
+        def run():
+            entry = next((e for e in _download_queue if e['id'] == entry_id), None)
+            if not entry:
+                return
+
+            if not prowlarr_url or not prowlarr_key:
+                DownloadQueue.update(entry_id, status='failed',
+                                     error='Prowlarr URL/API key not set in Settings')
+                Clock.schedule_once(lambda dt: on_update(entry), 0)
+                return
+
+            # 1. Search
+            DownloadQueue.update(entry_id, status='searching', error='')
+            Clock.schedule_once(lambda dt: on_update(entry), 0)
+            try:
+                client  = ProwlarrClient(prowlarr_url, prowlarr_key)
+                results = client.search(entry['title'], entry.get('year'))
+                if not results:
+                    DownloadQueue.update(entry_id, status='no_results',
+                                         error='No releases found on any indexer')
+                    Clock.schedule_once(lambda dt: on_update(entry), 0)
+                    return
+                best = client.best_release(results)
+                DownloadQueue.update(entry_id, status='results_found',
+                                      results=results[:20],  # cap stored results
+                                      chosen=best)
+                Clock.schedule_once(lambda dt: on_update(entry), 0)
+            except Exception as e:
+                DownloadQueue.update(entry_id, status='failed', error=str(e))
+                Clock.schedule_once(lambda dt: on_update(entry), 0)
+                return
+
+            # 2. Grab via Prowlarr → sends to configured download client
+            if not best:
+                DownloadQueue.update(entry_id, status='no_results',
+                                      error='No grabbable release found')
+                Clock.schedule_once(lambda dt: on_update(entry), 0)
+                return
+            try:
+                DownloadQueue.update(entry_id, status='grabbing')
+                Clock.schedule_once(lambda dt: on_update(entry), 0)
+                client.grab(best)
+                # After grab, qBit hash not immediately known — mark as downloading
+                # A future poll of qBit will match by title and update the hash
+                DownloadQueue.update(entry_id, status='downloading',
+                                      qbit_hash=None)
+                Clock.schedule_once(lambda dt: on_update(entry), 0)
+            except Exception as e:
+                DownloadQueue.update(entry_id, status='failed', error=str(e))
+                Clock.schedule_once(lambda dt: on_update(entry), 0)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    @staticmethod
+    def poll_qbit(on_update):
+        """Poll qBittorrent for progress on all downloading entries.
+        Matches by torrent hash if known, else attempts title match.
+        Future: cache the SID session to avoid re-login every poll."""
+        qbit_url  = Settings.get('qbit_url', '')
+        qbit_user = Settings.get('qbit_username', 'admin')
+        qbit_pass = Settings.get('qbit_password', 'adminadmin')
+        active    = [e for e in _download_queue
+                     if e['status'] in ('downloading', 'grabbing')]
+        if not active or not qbit_url:
+            return
+
+        def run():
+            try:
+                qb = QBitClient(qbit_url, qbit_user, qbit_pass)
+                if not qb.login():
+                    return
+                torrents = qb.get_torrents()
+                for entry in active:
+                    matched = None
+                    if entry.get('qbit_hash'):
+                        matched = next((t for t in torrents
+                                        if t['hash'] == entry['qbit_hash']), None)
+                    if not matched:
+                        # Try title fuzzy match
+                        slug = entry['title'].lower().replace(' ', '.')
+                        matched = next((t for t in torrents
+                                        if slug[:10] in t.get('name','').lower()), None)
+                    if matched:
+                        prog   = matched.get('progress', 0.0)
+                        state  = matched.get('state', '')
+                        eta    = matched.get('eta', -1)
+                        size   = matched.get('size', 0)
+                        status = 'complete' if prog >= 1.0 else 'downloading'
+                        DownloadQueue.update(
+                            entry['id'],
+                            qbit_hash=matched['hash'],
+                            progress=prog,
+                            qbit_status=state,
+                            eta_secs=eta,
+                            size_bytes=size,
+                            status=status)
+                        Clock.schedule_once(lambda dt: on_update(), 0)
+            except Exception:
+                pass
+
+        threading.Thread(target=run, daemon=True).start()
+
+
 # ── Async Fetch Helpers ───────────────────────────────────────────────────────
 def fetch_plex_async(url, token, on_done, on_error):
     def run():
@@ -926,13 +1289,264 @@ FLAG = {"JP": "🇯🇵", "KR": "🇰🇷", "FR": "🇫🇷", "UK": "🇬🇧", 
 class SectionLabel(Label):
     pass
 
+# ── Downloads Screen ──────────────────────────────────────────────────────────
+class DownloadsScreen(Screen):
+    """Tracks movies queued for download through the Prowlarr + qBittorrent pipeline.
+
+    Status flow per entry:
+      queued → searching → results_found / no_results → grabbing → downloading → complete / failed
+
+    Future features to build here:
+    - Drag-to-reorder priority queue
+    - Tap entry to see all Prowlarr search results and pick a different release
+    - Quality preference badge (user-chosen: 1080p / 4K / 720p)
+    - Auto Plex library refresh when status → complete
+    - Completed downloads badge count on tab button
+    - Filter buttons: All | Downloading | Complete | Failed
+    - Subtitle search trigger (OpenSubtitles) after completion
+    - Batch-add from Recommend swipe gestures
+    - Estimated storage usage total across all downloading entries
+    """
+
+    _STATUS_COLOR = {
+        'queued':        (0.60, 0.60, 0.70, 1),  # SUBTEXT
+        'searching':     (0.95, 0.75, 0.20, 1),  # GOLD
+        'results_found': (0.30, 0.60, 0.95, 1),  # ACCENT2
+        'no_results':    (0.95, 0.30, 0.30, 1),  # ACCENT
+        'grabbing':      (0.95, 0.75, 0.20, 1),  # GOLD
+        'downloading':   (0.30, 0.60, 0.95, 1),  # ACCENT2
+        'complete':      (0.20, 0.75, 0.40, 1),  # GREEN
+        'failed':        (0.95, 0.30, 0.30, 1),  # ACCENT
+    }
+    _STATUS_LABEL = {
+        'queued':        '● Queued',
+        'searching':     '● Searching Prowlarr…',
+        'results_found': '● Release found',
+        'no_results':    '● No releases found',
+        'grabbing':      '● Sending to qBit…',
+        'downloading':   '● Downloading',
+        'complete':      '● Complete',
+        'failed':        '● Failed',
+    }
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._poll_ev    = None
+        self._list_box   = None
+        self._empty_lbl  = None
+        self._build_ui()
+
+    def on_enter(self):
+        self._rebuild_list()
+        self._poll_ev = Clock.schedule_interval(lambda dt: self._poll(), 30)
+
+    def on_leave(self):
+        if self._poll_ev:
+            self._poll_ev.cancel()
+            self._poll_ev = None
+
+    def _build_ui(self):
+        root = BoxLayout(orientation='vertical')
+        with root.canvas.before:
+            Color(*BG)
+            Rectangle(pos=root.pos, size=root.size)
+
+        hdr = BoxLayout(size_hint_y=None, height=dp(50), padding=[dp(12), dp(8)])
+        with hdr.canvas.before:
+            Color(0.10, 0.10, 0.14, 1)
+            self._hdr_rect = Rectangle(pos=hdr.pos, size=hdr.size)
+        hdr.bind(pos=lambda w, _: self._upd_rect(w),
+                 size=lambda w, _: self._upd_rect(w))
+        hdr.add_widget(Label(text="[b]Downloads[/b]", markup=True,
+                             font_size=dp(20), color=ACCENT,
+                             halign='left', valign='middle'))
+        refresh_btn = Button(text="↺", font_size=dp(18),
+                             size_hint_x=None, width=dp(40),
+                             background_normal="", background_color=(0,0,0,0),
+                             color=ACCENT2)
+        refresh_btn.bind(on_press=lambda *_: (self._poll(), self._rebuild_list()))
+        hdr.add_widget(refresh_btn)
+        root.add_widget(hdr)
+
+        scroll = ScrollView()
+        self._list_box = BoxLayout(orientation='vertical', size_hint_y=None,
+                                   spacing=dp(8), padding=[dp(8), dp(8)])
+        self._list_box.bind(minimum_height=self._list_box.setter('height'))
+        self._empty_lbl = Label(
+            text="No downloads queued.\nTap Download on any movie not available on Plex.",
+            font_size=dp(13), color=SUBTEXT, halign='center', valign='middle',
+            size_hint_y=None, height=dp(120))
+        self._empty_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
+        self._list_box.add_widget(self._empty_lbl)
+        scroll.add_widget(self._list_box)
+        root.add_widget(scroll)
+        self.add_widget(root)
+
+    def _upd_rect(self, w):
+        w.canvas.before.clear()
+        with w.canvas.before:
+            Color(0.10, 0.10, 0.14, 1)
+            Rectangle(pos=w.pos, size=w.size)
+
+    def _rebuild_list(self):
+        self._list_box.clear_widgets()
+        if not _download_queue:
+            self._list_box.add_widget(self._empty_lbl)
+            return
+        for entry in reversed(_download_queue):  # newest first
+            self._list_box.add_widget(self._make_entry_card(entry))
+
+    def _make_entry_card(self, entry):
+        card = BoxLayout(orientation='vertical', size_hint_y=None,
+                         height=dp(110), padding=[dp(10), dp(8)], spacing=dp(4))
+        with card.canvas.before:
+            Color(*CARD)
+            RoundedRectangle(pos=card.pos, size=card.size, radius=[dp(10)])
+        card.bind(pos=lambda w, _: self._redraw_card(w),
+                  size=lambda w, _: self._redraw_card(w))
+
+        # Row 1: title + status badge
+        row1 = BoxLayout(size_hint_y=None, height=dp(22))
+        title_lbl = Label(
+            text=f"[b]{entry['title']}[/b]  ({entry.get('year','')})",
+            markup=True, font_size=dp(13), color=TEXT,
+            halign='left', valign='middle')
+        title_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
+        status = entry.get('status', 'queued')
+        status_lbl = Label(
+            text=self._STATUS_LABEL.get(status, status),
+            font_size=dp(10),
+            color=self._STATUS_COLOR.get(status, SUBTEXT),
+            size_hint_x=None, width=dp(130),
+            halign='right', valign='middle')
+        status_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
+        row1.add_widget(title_lbl)
+        row1.add_widget(status_lbl)
+        card.add_widget(row1)
+
+        # Row 2: genre · director · added
+        meta = f"{entry.get('genre','')}  ·  {entry.get('director','')}  ·  {entry.get('added_at','')}"
+        meta_lbl = Label(text=meta, font_size=dp(9), color=SUBTEXT,
+                         size_hint_y=None, height=dp(16),
+                         halign='left', valign='middle')
+        meta_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
+        card.add_widget(meta_lbl)
+
+        # Row 3: progress bar or error/result info
+        if status == 'downloading':
+            prog     = entry.get('progress', 0.0)
+            eta_secs = entry.get('eta_secs', -1)
+            pct_txt  = f"{int(prog * 100)}%"
+            if eta_secs > 0:
+                m, s = divmod(int(eta_secs), 60)
+                h, m = divmod(m, 60)
+                eta_txt = f"  ETA {h}h {m}m" if h else f"  ETA {m}m {s}s"
+            else:
+                eta_txt = ''
+            size_mb  = entry.get('size_bytes', 0) / 1024 / 1024
+            size_txt = f"  {size_mb:.0f} MB" if size_mb > 0 else ''
+            info_lbl = Label(
+                text=f"{pct_txt}{eta_txt}{size_txt}",
+                font_size=dp(10), color=ACCENT2,
+                size_hint_y=None, height=dp(16),
+                halign='left', valign='middle')
+            info_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
+            card.add_widget(info_lbl)
+            # Progress bar
+            pb_box = BoxLayout(size_hint_y=None, height=dp(8))
+            with pb_box.canvas.before:
+                Color(*CARD)
+                RoundedRectangle(pos=pb_box.pos, size=pb_box.size, radius=[dp(4)])
+            pb_box.bind(pos=lambda w, _: self._redraw_prog_bg(w),
+                        size=lambda w, _: self._redraw_prog_bg(w))
+            fill = BoxLayout(size_hint_x=max(prog, 0.02))
+            fill._fill_color = ACCENT2
+            with fill.canvas.before:
+                Color(*ACCENT2)
+                RoundedRectangle(pos=fill.pos, size=fill.size, radius=[dp(4)])
+            fill.bind(pos=lambda w, _: self._redraw_fill(w),
+                      size=lambda w, _: self._redraw_fill(w))
+            pb_box.add_widget(fill)
+            pb_box.add_widget(Widget(size_hint_x=1.0 - max(prog, 0.02)))
+            card.add_widget(pb_box)
+        elif status == 'failed' and entry.get('error'):
+            err_lbl = Label(text=entry['error'], font_size=dp(9), color=ACCENT,
+                            size_hint_y=None, height=dp(16),
+                            halign='left', valign='middle')
+            err_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
+            card.add_widget(err_lbl)
+        elif status == 'results_found' and entry.get('chosen'):
+            chosen = entry['chosen']
+            rel_title = chosen.get('title', '')[:50]
+            seeders   = chosen.get('seeders', '?')
+            size_mb   = (chosen.get('size') or 0) / 1024 / 1024
+            size_txt  = f"{size_mb:.0f} MB" if size_mb > 0 else ''
+            info_lbl = Label(
+                text=f"{rel_title}  ·  {seeders} seeders  {size_txt}",
+                font_size=dp(9), color=ACCENT2,
+                size_hint_y=None, height=dp(16), halign='left', valign='middle')
+            info_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
+            card.add_widget(info_lbl)
+        elif status == 'no_results':
+            retry_row = BoxLayout(size_hint_y=None, height=dp(24), spacing=dp(8))
+            retry_btn = Button(text="↺ Retry Search", font_size=dp(10),
+                               background_normal="", background_color=CARD,
+                               color=ACCENT2)
+            retry_btn.bind(on_press=lambda *_, eid=entry['id']:
+                           self._retry(eid))
+            retry_row.add_widget(retry_btn)
+            card.add_widget(retry_row)
+
+        # Row: remove button
+        btn_row = BoxLayout(size_hint_y=None, height=dp(24), spacing=dp(8))
+        btn_row.add_widget(Widget())
+        remove_btn = Button(text="Remove", font_size=dp(9),
+                            size_hint_x=None, width=dp(70),
+                            background_normal="", background_color=(0.3,0.1,0.1,1),
+                            color=ACCENT)
+        remove_btn.bind(on_press=lambda *_, eid=entry['id']: self._remove(eid))
+        btn_row.add_widget(remove_btn)
+        card.add_widget(btn_row)
+        return card
+
+    def _redraw_card(self, w):
+        w.canvas.before.clear()
+        with w.canvas.before:
+            Color(*CARD)
+            RoundedRectangle(pos=w.pos, size=w.size, radius=[dp(10)])
+
+    def _redraw_prog_bg(self, w):
+        w.canvas.before.clear()
+        with w.canvas.before:
+            Color(0.2, 0.2, 0.25, 1)
+            RoundedRectangle(pos=w.pos, size=w.size, radius=[dp(4)])
+
+    def _redraw_fill(self, w):
+        w.canvas.before.clear()
+        with w.canvas.before:
+            Color(*getattr(w, '_fill_color', ACCENT2))
+            RoundedRectangle(pos=w.pos, size=w.size, radius=[dp(4)])
+
+    def _retry(self, entry_id):
+        DownloadQueue.search_and_grab(entry_id, lambda e: self._rebuild_list())
+
+    def _remove(self, entry_id):
+        DownloadQueue.remove(entry_id)
+        self._rebuild_list()
+
+    def _poll(self):
+        DownloadQueue.poll_qbit(self._rebuild_list)
+        self._rebuild_list()
+
+
 class NavBar(BoxLayout):
     def __init__(self, manager, **kwargs):
         super().__init__(**kwargs)
         self.manager = manager
         for label, name in [("Watch","watch"),("Recommend","recommend"),
-                             ("Analytics","analytics"),("Settings","settings")]:
-            btn = Button(text=label, font_size=dp(11), bold=True,
+                             ("Analytics","analytics"),("Downloads","downloads"),
+                             ("Settings","settings")]:
+            btn = Button(text=label, font_size=dp(10), bold=True,
                          background_color=(0,0,0,0), color=SUBTEXT)
             btn.screen_name = name
             btn.bind(on_press=self._switch)
@@ -1467,27 +2081,58 @@ class WatchScreen(Screen):
             lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
             content.add_widget(lbl)
 
-        watch_btn = Button(text="▶  Watch on Plex",
-                           size_hint_y=None, height=dp(40),
-                           background_normal="", background_color=GREEN,
-                           color=TEXT, font_size=dp(13), bold=True)
+        on_plex = movie.get('source') == 'plex' or movie.get('on_plex', False)
+
+        if on_plex:
+            watch_btn = Button(text="▶  Watch on Plex",
+                               size_hint_y=None, height=dp(40),
+                               background_normal="", background_color=GREEN,
+                               color=TEXT, font_size=dp(13), bold=True)
+            content.add_widget(watch_btn)
+        else:
+            dl_btn = Button(text="▼  Queue Download",
+                            size_hint_y=None, height=dp(40),
+                            background_normal="", background_color=ACCENT2,
+                            color=TEXT, font_size=dp(13), bold=True)
+            avail_lbl = Label(text="Not available on Plex — queue via Prowlarr",
+                              font_size=dp(10), color=GOLD,
+                              size_hint_y=None, height=dp(18),
+                              halign='center', valign='middle')
+            avail_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
+            content.add_widget(avail_lbl)
+            content.add_widget(dl_btn)
+
         close_btn = Button(text="Close", size_hint_y=None, height=dp(36),
                            background_normal="", background_color=CARD,
                            color=SUBTEXT, font_size=dp(12))
-        content.add_widget(watch_btn)
         content.add_widget(close_btn)
 
         popup = Popup(title=movie['title'], content=content,
-                      size_hint=(0.9, 0.75),
+                      size_hint=(0.9, 0.82),
                       background_color=(0.10, 0.10, 0.14, 1), title_color=TEXT)
 
-        def _open_plex(btn, m=movie):
-            plex_url = Settings.get('plex_url', '').rstrip('/')
-            if plex_url:
-                webbrowser.open(plex_url + '/web/index.html')
-            popup.dismiss()
+        if on_plex:
+            def _open_plex(btn, m=movie):
+                plex_url = Settings.get('plex_url', '').rstrip('/')
+                if plex_url:
+                    webbrowser.open(plex_url + '/web/index.html')
+                popup.dismiss()
+            watch_btn.bind(on_press=_open_plex)
+        else:
+            def _queue_dl(btn, m=movie):
+                entry = DownloadQueue.add(m)
+                if entry:
+                    DownloadQueue.search_and_grab(entry['id'], lambda e: None)
+                    popup.dismiss()
+                    # Switch to Downloads tab
+                    app = App.get_running_app()
+                    if app and hasattr(app, '_sm'):
+                        app._sm.current = 'downloads'
+                else:
+                    dl_btn.text = "Already queued"
+                    dl_btn.background_color = SUBTEXT
+            dl_btn.bind(on_press=_queue_dl)
 
-        watch_btn.bind(on_press=_open_plex)
         close_btn.bind(on_press=popup.dismiss)
         popup.open()
 
@@ -1621,16 +2266,32 @@ class RecommendScreen(Screen):
             lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
             info.add_widget(lbl)
 
-        on_plex = movie.get('source') == 'plex'
-        avail = Label(
-            text=(f"{E('✅')} Available on Plex" if on_plex
-                  else f"{E('🚫')} Not on server"),
-            markup=True, font_size=dp(10),
-            color=GREEN if on_plex else GOLD,
-            halign='left', valign='middle',
-            size_hint_y=None, height=dp(18))
+        on_plex = movie.get('source') == 'plex' or movie.get('on_plex', False)
+        avail_text  = "● Available on Plex" if on_plex else "● Not on Plex"
+        avail_color = GREEN if on_plex else GOLD
+        avail = Label(text=avail_text, font_size=dp(10), color=avail_color,
+                      halign='left', valign='middle',
+                      size_hint_y=None, height=dp(18))
         avail.bind(size=lambda w, s: setattr(w, 'text_size', s))
         info.add_widget(avail)
+
+        if not on_plex:
+            dl_btn = Button(text="▼  Queue Download", font_size=dp(10),
+                            size_hint_y=None, height=dp(28),
+                            background_normal="", background_color=ACCENT2,
+                            color=TEXT)
+            def _queue(btn, m=movie):
+                entry = DownloadQueue.add(m)
+                if entry:
+                    DownloadQueue.search_and_grab(entry['id'], lambda e: None)
+                    btn.text = "● Queued"
+                    btn.background_color = SUBTEXT
+                else:
+                    btn.text = "Already queued"
+                    btn.background_color = SUBTEXT
+            dl_btn.bind(on_press=_queue)
+            info.add_widget(dl_btn)
+
         card.add_widget(info)
         return card
 
@@ -2008,6 +2669,15 @@ class SettingsScreen(Screen):
                 ("dsm_password",  "NAS Password",       "your password",       True),
                 ("qbit_project",  "VPN+qBit Project",   "qbittorent-gluetun",  False),
                 ("arr_project",   "Arr Stack Project",  "arr-apps",            False),
+            ]),
+            ("PROWLARR (Download Search)", [
+                ("prowlarr_url",     "Prowlarr URL",    "http://192.168.1.100:9696", False),
+                ("prowlarr_api_key", "API Key",         "your-prowlarr-api-key",     True),
+            ]),
+            ("QBITTORRENT (Download Client)", [
+                ("qbit_url",      "Web UI URL",   "http://192.168.1.100:8080", False),
+                ("qbit_username", "Username",     "admin",                     False),
+                ("qbit_password", "Password",     "adminadmin",                True),
             ]),
             ("TMDB (Movie Posters)", [
                 ("tmdb_key", "API Key", "Get free key at themoviedb.org", False),
@@ -2485,6 +3155,7 @@ class CineQueueApp(App):
         LabelBase.register('NotoEmoji', fn_regular=font_path)
 
         Settings.load()
+        DownloadQueue.load()
 
         self._sm              = ScreenManager(transition=SlideTransition())
         self._settings_screen = SettingsScreen(name='settings')
@@ -2497,6 +3168,7 @@ class CineQueueApp(App):
         for s in [self._watch_screen,
                   RecommendScreen(name='recommend'),
                   AnalyticsScreen(name='analytics'),
+                  DownloadsScreen(name='downloads'),
                   self._settings_screen]:
             self._sm.add_widget(s)
 
