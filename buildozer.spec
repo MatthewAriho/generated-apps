@@ -4,7 +4,7 @@ package.name = cinequeue
 package.domain = org.cinequeue
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,ttf
-version = 0.1
+version = 1.9
 requirements = python3,kivy
 orientation = portrait
 osx.python_version = 3
@@ -21,4 +21,4 @@ android.logcat_filters = *:S python:D
 
 [buildozer]
 log_level = 2
-warn_on_root = 1
+warn_on_root = 0

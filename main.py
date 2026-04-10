@@ -3,7 +3,7 @@ CineQueue — Movie Picker App
 Plex + Letterboxd integration with real API connections
 """
 
-import random, json, os, re, ssl, threading
+import random, json, os, re, ssl, threading, socket
 import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -26,6 +26,7 @@ from kivy.clock import Clock
 from kivy.animation import Animation
 from kivy.core.window import Window
 from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.relativelayout import RelativeLayout
 from kivy.uix.textinput import TextInput
 from kivy.core.text import LabelBase
 from kivy.resources import resource_find
@@ -119,6 +120,7 @@ MOCK_WATCHED = [
 # ── Live Data Store ───────────────────────────────────────────────────────────
 _plex_movies = list(MOCK_PLEX)
 _lb_movies   = list(MOCK_LB)
+_lb_stats    = {}   # scraped from Letterboxd profile: total_films, watched_this_year
 _refresh_cbs = []
 
 def _notify_refresh():
@@ -166,7 +168,87 @@ class Settings:
 
     @classmethod
     def get(cls, key, default=''):
-        return cls._data.get(key, default)
+        val = cls._data.get(key)
+        if val is None:
+            return default  # key doesn't exist at all
+        return val          # return whatever was saved, including ''
+
+# ── Movie Cache ───────────────────────────────────────────────────────────────
+class MovieCache:
+    """Persists movie data across launches to avoid re-fetching everything."""
+    _path = None
+    _TMDB_FIELDS = ('poster_url', 'poster_color', 'director', 'runtime',
+                    'genre', 'country', 'year')
+    _EMPTY_VALS  = (None, '', 'Unknown', '?', 0)
+
+    @classmethod
+    def _file(cls):
+        if cls._path is None:
+            try:
+                base = App.get_running_app().user_data_dir
+            except Exception:
+                base = os.path.expanduser('~')
+            cls._path = os.path.join(base, 'cinequeue_movies.json')
+        return cls._path
+
+    @classmethod
+    def load(cls):
+        """Returns (plex_movies, lb_movies, lb_stats). Empty lists if no cache."""
+        try:
+            f = cls._file()
+            if os.path.exists(f):
+                with open(f) as fp:
+                    d = json.load(fp)
+                plex = d.get('plex', [])
+                lb   = d.get('lb',   [])
+                stats = d.get('lb_stats', {})
+                if plex or lb:
+                    #print(f"[Cache] Loaded {len(plex)} plex, {len(lb)} lb movies")
+                    return plex, lb, stats
+        except Exception as e:
+            pass
+            #print(f"[Cache] Load failed: {e}")
+        return [], [], {}
+
+    @classmethod
+    def save(cls, plex_movies, lb_movies, lb_stats):
+        try:
+            with open(cls._file(), 'w') as fp:
+                json.dump({
+                    'plex':     plex_movies,
+                    'lb':       lb_movies,
+                    'lb_stats': lb_stats,
+                    'saved_at': datetime.now().isoformat(),
+                }, fp)
+            #print(f"[Cache] Saved {len(plex_movies)} plex, {len(lb_movies)} lb")
+        except Exception as e:
+            pass
+            #print(f"[Cache] Save failed: {e}")
+
+    @classmethod
+    def merge(cls, cached, fresh):
+        """Merge fresh API results into cached list.
+        Returns (merged, new_only).
+        TMDB enrichment from cache is preserved for existing movies."""
+        def _key(m): return m['title'].lower().strip()
+        cached_map = {_key(m): m for m in cached}
+
+        merged, new = [], []
+        for m in fresh:
+            k = _key(m)
+            if k in cached_map:
+                old = cached_map[k]
+                updated = dict(m)
+                # Keep TMDB-enriched fields from cache if fresh data is empty/unknown
+                for field in cls._TMDB_FIELDS:
+                    if updated.get(field) in cls._EMPTY_VALS and \
+                            old.get(field) not in cls._EMPTY_VALS:
+                        updated[field] = old[field]
+                merged.append(updated)
+            else:
+                merged.append(m)
+                new.append(m)
+        return merged, new
 
 # ── Plex Client ───────────────────────────────────────────────────────────────
 class PlexClient:
@@ -230,80 +312,475 @@ class PlexClient:
 class LetterboxdClient:
     def __init__(self, username):
         self.username = username.lstrip('@').strip()
+        self._ctx = ssl._create_unverified_context()
 
     def fetch_watchlist(self):
-        url = f"https://letterboxd.com/{self.username}/watchlist/rss/"
-        req = urllib.request.Request(url, headers={'User-Agent': 'CineQueue/1.0'})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            raw = r.read()
-
-        raw_str = raw.decode('utf-8', errors='replace')
-        m = re.search(r'xmlns:letterboxd=["\']([^"\']+)["\']', raw_str)
-        lb_ns = m.group(1) if m else 'https://a.letterboxd.com/dtd/letterboxd-2.0.dtd'
-
-        root    = ET.fromstring(raw)
-        channel = root.find('channel')
-        if channel is None:
-            return []
-
+        from html import unescape
         movies = []
-        for item in channel.findall('item'):
-            title = (item.findtext(f'{{{lb_ns}}}filmTitle') or
-                     item.findtext('title', '')).strip()
-            if not title:
-                continue
-            year_s = item.findtext(f'{{{lb_ns}}}filmYear', '')
-            try:
-                year = int(year_s)
-            except Exception:
-                year = 0
+        page = 1
 
-            desc = item.findtext('description', '')
-            pm = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', desc)
-            poster_url = pm.group(1) if pm else None
+        while True:
+            url = f"https://letterboxd.com/{self.username}/watchlist/page/{page}/"
+            #print(f"[Letterboxd] Fetching page {page}: {url}")
 
-            lb_added = ''
-            pub = item.findtext('pubDate', '').strip()
-            for fmt in ('%a, %d %b %Y %H:%M:%S %z', '%a, %d %b %Y %H:%M:%S %Z'):
-                try:
-                    lb_added = datetime.strptime(pub, fmt).strftime('%Y-%m-%d')
-                    break
-                except Exception:
-                    pass
-
-            movies.append({
-                'title':        title,
-                'year':         year,
-                'genre':        'Unknown',
-                'country':      '?',
-                'rating':       0.0,
-                'lb_added':     lb_added,
-                'poster_url':   poster_url,
-                'poster_color': CARD,
-                'runtime':      0,
-                'director':     'Unknown',
-                'source':       'letterboxd',
+            req = urllib.request.Request(url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             })
+
+            try:
+                with urllib.request.urlopen(req, timeout=20, context=self._ctx) as r:
+                    html = r.read().decode('utf-8', errors='replace')
+                #print(f"[Letterboxd] Got response, length={len(html)} chars")
+            except urllib.error.HTTPError as e:
+                #print(f"[Letterboxd] HTTPError {e.code} on page {page} — stopping pagination")
+                if e.code == 404:
+                    break
+                raise
+
+            poster_divs = re.findall(
+                r'<div[^>]+class="react-component"[^>]+data-target-link="/film/[^>]+>',
+                html
+            )
+            #print(f"[Letterboxd] Found {len(poster_divs)} react-component film divs on page {page}")
+
+            if not poster_divs:
+                #print(f"[Letterboxd] No films found on page {page} — stopping")
+                break
+
+            for i, tag in enumerate(poster_divs):
+                #print(f"[Letterboxd]   [{i}] Raw tag: {tag[:200]}")
+
+                slug_m = re.search(r'data-target-link="/film/([^/]+)/"', tag)
+                slug = slug_m.group(1) if slug_m else None
+                if not slug:
+                    #print(f"[Letterboxd]   [{i}] No slug found — skipping")
+                    continue
+
+                title = slug.replace('-', ' ').title()
+                #print(f"[Letterboxd]   [{i}] slug={slug!r}  title={title!r}")
+
+                movies.append({
+                    'title':        title,
+                    'year':         0,
+                    'genre':        'Unknown',
+                    'country':      '?',
+                    'rating':       0.0,
+                    'lb_added':     '',
+                    'poster_url':   None,
+                    'poster_color': CARD,
+                    'runtime':      0,
+                    'director':     'Unknown',
+                    'source':       'letterboxd',
+                })
+
+            next_page_url = f'/watchlist/page/{page + 1}/'
+            has_next = next_page_url in html
+            #print(f"[Letterboxd] Next page check: {next_page_url!r} in html → {has_next}")
+
+            if not has_next:
+                #print(f"[Letterboxd] No next page found — done after page {page}")
+                break
+
+            page += 1
+
+        #print(f"[Letterboxd] Done. Total films fetched: {len(movies)}")
         return movies
+
+    def fetch_stats(self):
+        """Scrape basic watch stats from the user's Letterboxd profile."""
+        stats = {}
+        try:
+            url = f"https://letterboxd.com/{self.username}/"
+            req = urllib.request.Request(url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
+            with urllib.request.urlopen(req, timeout=20, context=self._ctx) as r:
+                html = r.read().decode('utf-8', errors='replace')
+
+            # Total films watched
+            m = re.search(r'data-stat="film-count"[^>]*>\s*<span[^>]*>([\d,]+)', html)
+            if m:
+                stats['total_films'] = int(m.group(1).replace(',', ''))
+                #print(f"[LB Stats] Total films: {stats['total_films']}")
+
+            # This year
+            year = datetime.now().year
+            year_url = f"https://letterboxd.com/{self.username}/films/year/{year}/"
+            req2 = urllib.request.Request(year_url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
+            with urllib.request.urlopen(req2, timeout=20, context=self._ctx) as r2:
+                year_html = r2.read().decode('utf-8', errors='replace')
+
+            film_divs = re.findall(r'<li[^>]+class="[^"]*poster-container[^"]*"', year_html)
+            stats['watched_this_year'] = len(film_divs)
+            #print(f"[LB Stats] Watched this year: {stats['watched_this_year']}")
+        except Exception as e:
+            #print(f"[LB Stats] Error: {e}")
+            pass
+        return stats
+
+# ── Synology Client ───────────────────────────────────────────────────────────
+class SynologyClient:
+    """Controls Plex (package) and Docker containers via DSM 7 REST API."""
+
+    _AUTH_ERRORS = {
+        400: "Wrong username or password",
+        401: "Account disabled",
+        402: "Permission denied — add user to administrators group in DSM Control Panel → User & Group",
+        403: "2FA is enabled — create a DSM user without 2FA for the app",
+        404: "2FA code incorrect",
+        407: "Account locked (too many attempts) — unlock in DSM Control Panel → User",
+        411: "Account locked down",
+    }
+
+    _API_ERRORS = {
+        100: "Unknown error",
+        101: "Invalid parameter",
+        102: "API does not exist",
+        103: "Method does not exist",
+        105: "Permission denied — user needs administrator rights in DSM",
+        106: "Session timeout — will retry",
+        107: "Session interrupted",
+        114: "Container may be in a stack/project — try starting from Container Manager",
+        # 2104 intentionally NOT here — handled per-call in project methods
+    }
+
+    def __init__(self, nas_ip, port, username, password):
+        self._nas_ip  = nas_ip
+        self._port    = str(port)
+        self.username = username
+        self.password = password
+        self._sid     = None
+        self._ctx     = ssl._create_unverified_context()
+        self.base     = self._resolve_base()
+
+    def _resolve_base(self):
+        """Try HTTP first, fall back to HTTPS if connection refused."""
+        return f"http://{self._nas_ip}:{self._port}/webapi/entry.cgi"
+
+    def _url(self, params):
+        return self.base + '?' + urllib.parse.urlencode(params)
+
+    def _get(self, url, timeout=10):
+        try:
+            with urllib.request.urlopen(
+                    urllib.request.Request(url), timeout=timeout,
+                    context=self._ctx) as r:
+                return json.loads(r.read())
+        except (socket.timeout, TimeoutError):
+            raise  # don't retry on timeout — it would double the wait
+        except OSError:
+            # Retry on HTTPS port if HTTP connection was refused
+            https_base = f"https://{self._nas_ip}:{int(self._port)+1}/webapi/entry.cgi"
+            alt_url = url.replace(self.base, https_base)
+            with urllib.request.urlopen(
+                    urllib.request.Request(alt_url), timeout=timeout,
+                    context=self._ctx) as r:
+                data = json.loads(r.read())
+            self.base = https_base  # switch permanently
+            return data
+
+    def _login(self):
+        params = {'api': 'SYNO.API.Auth', 'method': 'login', 'version': '7',
+                  'account': self.username, 'passwd': self.password,
+                  'session': 'CineQueue', 'format': 'sid',
+                  'device_name': 'CineQueue'}
+        body = urllib.parse.urlencode(params).encode()
+        try:
+            req = urllib.request.Request(self.base, data=body,
+                                         method='POST',
+                                         headers={'Content-Type':
+                                                  'application/x-www-form-urlencoded'})
+            with urllib.request.urlopen(req, timeout=10, context=self._ctx) as r:
+                data = json.loads(r.read())
+        except OSError:
+            https_base = f"https://{self._nas_ip}:{int(self._port)+1}/webapi/entry.cgi"
+            req = urllib.request.Request(https_base, data=body,
+                                         method='POST',
+                                         headers={'Content-Type':
+                                                  'application/x-www-form-urlencoded'})
+            with urllib.request.urlopen(req, timeout=10, context=self._ctx) as r:
+                data = json.loads(r.read())
+            self.base = https_base
+        if data.get('success'):
+            self._sid = data['data']['sid']
+        else:
+            code = data.get('error', {}).get('code', '?')
+            msg  = self._AUTH_ERRORS.get(code, f"code {code}")
+            raise Exception(msg)
+
+    def _req(self, params, timeout=10):
+        if not self._sid:
+            self._login()
+        result = self._get(self._url(dict(params, _sid=self._sid)), timeout)
+        # Re-login on expired/invalid session and retry once
+        if not result.get('success'):
+            code = result.get('error', {}).get('code')
+            if code in (106, 119):
+                self._sid = None
+                self._login()
+                result = self._get(self._url(dict(params, _sid=self._sid)), timeout)
+        return result
+
+    # ── Plex package ──────────────────────────────────────────────────────────
+    def plex_status(self):
+        d = self._req({'api': 'SYNO.Core.Package', 'method': 'list',
+                       'version': '2', 'additional': '["status"]'}, timeout=60)
+        for pkg in d.get('data', {}).get('packages', []):
+            print(f"pkg - {pkg.get('id')}")
+            if pkg.get('id') == 'PlexMediaServer':
+                for k, v in pkg.items():
+                    print(f"  {k}: {v}")
+                return pkg.get('additional', {}).get('status', 'unknown')
+        return 'not installed'
+
+    def discover_package_apis(self):
+        url = self.base.replace('entry.cgi', 'query.cgi') + \
+              '?api=SYNO.API.Info&method=query&version=1&query=all'
+        print(f"[Discovery] Querying all APIs...")
+        try:
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=15, context=self._ctx) as r:
+                data = json.loads(r.read())
+            apis = data.get('data', {})
+            print(f"[Discovery] Total APIs found: {len(apis)}")
+            for name, info in sorted(apis.items()):
+                if 'package' in name.lower():
+                    print(f"  {name}: min={info.get('minVersion')} "
+                          f"max={info.get('maxVersion')} path={info.get('path')}")
+        except Exception as e:
+            print(f"[Discovery] Error: {e}")
+
+    def discover_control_methods(self):
+        if not self._sid:
+            self._login()
+        print("\n--- SYNO.Core.Package.Control ---")
+        combos = [
+            {'method': 'start', 'id': 'PlexMediaServer'},
+            {'method': 'stop',  'id': 'PlexMediaServer'},
+            {'method': 'set',   'id': 'PlexMediaServer', 'status': 'stop'},
+            {'method': 'set',   'id': 'PlexMediaServer', 'action': 'stop'},
+            {'method': 'set',   'name': 'PlexMediaServer', 'status': 'stop'},
+            {'method': 'stop',  'name': 'PlexMediaServer'},
+            {'method': 'start', 'name': 'PlexMediaServer'},
+        ]
+        for combo in combos:
+            params = {'api': 'SYNO.Core.Package.Control', 'version': '1',
+                      '_sid': self._sid, **combo}
+            try:
+                result = self._get(self._url(params), timeout=15)
+                print(f"  {combo} → success={result.get('success')} "
+                      f"code={result.get('error', {}).get('code')} "
+                      f"data={result.get('data')}")
+            except Exception as e:
+                print(f"  {combo} → exception={e}")
+        print("\n--- SYNO.Core.Package v1+v2 ---")
+        for method in ['start', 'stop', 'restart']:
+            for version in [1, 2]:
+                for id_key in ['id', 'name']:
+                    params = {'api': 'SYNO.Core.Package', 'method': method,
+                              'version': str(version), id_key: 'PlexMediaServer',
+                              '_sid': self._sid}
+                    try:
+                        result = self._get(self._url(params), timeout=15)
+                        print(f"  Core.Package.{method} v{version} {id_key}= → "
+                              f"success={result.get('success')} "
+                              f"code={result.get('error', {}).get('code')}")
+                    except Exception as e:
+                        print(f"  Core.Package.{method} v{version} {id_key}= → exception={e}")
+
+    def _try_pkg_control(self, action, timeout):
+        # SYNO.Core.Package.Control with method=start/stop is the correct DSM 7.2 API
+        params = {
+            'api': 'SYNO.Core.Package.Control',
+            'method': action,
+            'version': '1',
+            'id': 'PlexMediaServer',
+        }
+        r = self._req(params, timeout=timeout)
+        return r
+
+    def plex_start(self):
+        return self._try_pkg_control('start', timeout=60)
+
+    def plex_stop(self):
+        return self._try_pkg_control('stop', timeout=60)
+
+    # ── Docker Compose projects ───────────────────────────────────────────────
+    # DSM 7.2+ Container Manager: SYNO.ContainerManager.Project
+    # DSM <7.2 Docker package:    SYNO.Docker.Project
+    _PROJECT_APIS = ('SYNO.Docker.Project',)
+
+    def _list_projects(self):
+        for api in self._PROJECT_APIS:
+            for attempt in range(2):
+                try:
+                    r = self._req({'api': api, 'method': 'list', 'version': '1'}, timeout=20)
+                    if r.get('success'):
+                        data = r.get('data', {})
+                        if isinstance(data, dict):
+                            projects = list(data.values())
+                            return projects
+                        if isinstance(data, list):
+                            return data
+                    break
+                except (socket.timeout, TimeoutError):
+                    if attempt == 0:
+                        continue
+                except Exception as e:
+                    print(f"[Projects] {api} list → exception: {e}")
+                    break
+        return []
+
+    def _project_by_name(self, name):
+        for p in self._list_projects():
+            pname = (p.get('name') or p.get('project_name') or
+                     p.get('compose_project_name') or '')
+            if pname == name:
+                return p
+        return None
+
+    def project_status(self, name):
+        # kept for back-compat but check_all uses project_status_from_list instead
+        p = self._project_by_name(name)
+        if p is None:
+            all_names = [q.get('name') for q in self._list_projects()]
+            return f'not found (have: {", ".join(str(n) for n in all_names)})'
+        status = (p.get('status') or p.get('state') or 'unknown').lower()
+        return status
+
+    def _check_arr_services(self, nas_ip):
+        """Check arr services by probing HTTP ports directly."""
+        services = {'prowlarr': 9696, 'sonarr': 8989, 'radarr': 7878}
+        results = {}
+        for name, port in services.items():
+            try:
+                url = f"http://{nas_ip}:{port}/"
+                req = urllib.request.Request(url, headers={'User-Agent': 'CineQueue/1.0'})
+                with urllib.request.urlopen(req, timeout=5, context=self._ctx) as r:
+                    results[name] = 'running'
+            except urllib.error.HTTPError:
+                results[name] = 'running'  # any HTTP response = service is up
+            except Exception:
+                results[name] = 'stopped'
+        return results
+
+    def project_status_from_list(self, name, projects, nas_ip=None):
+        p = next((p for p in projects if p.get('name') == name), None)
+        if p is None:
+            all_names = [q.get('name') for q in projects]
+            return f'not found (have: {", ".join(str(n) for n in all_names)})'
+
+        if name == 'arr-apps' and nas_ip:
+            svc_statuses = self._check_arr_services(nas_ip)
+            running = [n for n, s in svc_statuses.items() if s == 'running']
+            stopped = [n for n, s in svc_statuses.items() if s == 'stopped']
+            if not stopped:
+                return 'running'
+            elif not running:
+                return f'stopped ({", ".join(stopped)} down)'
+            else:
+                return f'partial ({", ".join(stopped)} down)'
+
+        status = (p.get('status') or p.get('state') or 'unknown').lower()
+        return status
+
+    def _project_action(self, method, name, timeout):
+        projects = self._list_projects()
+        p = next((p for p in projects if p.get('name') == name), None)
+        if p is None:
+            raise Exception(f"Project '{name}' not found")
+        project_id = p.get('id')
+        r = self._req({
+            'api': 'SYNO.Docker.Project',
+            'method': method,
+            'version': '1',
+            'id': project_id,
+        }, timeout=timeout)
+        return r
+
+    def project_start(self, name):
+        return self._project_action('start', name, timeout=60)
+
+    def project_stop(self, name):
+        return self._project_action('stop', name, timeout=60)
+
+def _nas_ip_from_plex_url(plex_url):
+    """Extract hostname/IP from the stored Plex URL."""
+    try:
+        return urllib.parse.urlparse(plex_url).hostname or ''
+    except Exception:
+        return ''
+
+def syno_action_async(action_fn, on_done, on_error):
+    def run():
+        try:
+            result = action_fn()
+            Clock.schedule_once(lambda dt: on_done(result), 0)
+        except Exception as e:
+            exc = e
+            Clock.schedule_once(lambda dt: on_error(str(exc)), 0)
+    threading.Thread(target=run, daemon=True).start()
 
 # ── Async Fetch Helpers ───────────────────────────────────────────────────────
 def fetch_plex_async(url, token, on_done, on_error):
     def run():
         try:
             movies = PlexClient(url, token).fetch_movies()
+            #print(f"[Plex] Fetched {len(movies)} movies")
             Clock.schedule_once(lambda dt: on_done(movies), 0)
         except Exception as e:
-            Clock.schedule_once(lambda dt: on_error(str(e)), 0)
+            exc = e
+            #print(f"[Plex] Error: {exc}")
+            Clock.schedule_once(lambda dt: on_error(str(exc)), 0)
     threading.Thread(target=run, daemon=True).start()
 
 def fetch_lb_async(username, on_done, on_error):
     def run():
         try:
             movies = LetterboxdClient(username).fetch_watchlist()
+            #print(f"[LB] Fetched {len(movies)} watchlist movies")
             Clock.schedule_once(lambda dt: on_done(movies), 0)
         except Exception as e:
-            Clock.schedule_once(lambda dt: on_error(str(e)), 0)
+            exc = e
+            #print(f"[LB] Error: {exc}")
+            Clock.schedule_once(lambda dt: on_error(str(exc)), 0)
     threading.Thread(target=run, daemon=True).start()
+
+def fetch_lb_stats_async(username, on_done, on_error):
+    def run():
+        try:
+            stats = LetterboxdClient(username).fetch_stats()
+            Clock.schedule_once(lambda dt: on_done(stats), 0)
+        except Exception as e:
+            exc = e
+            Clock.schedule_once(lambda dt: on_error(str(exc)), 0)
+    threading.Thread(target=run, daemon=True).start()
+
+# ── Data Quality / Intersection ───────────────────────────────────────────────
+def _is_bad_movie(m):
+    """Return True if movie data looks too broken to display."""
+    if not m.get('title') or len(m['title'].strip()) < 2:
+        return True
+    if m.get('runtime', 0) < 1:
+        return True  # 0-min runtime means missing data
+    unknown = sum(1 for v in [m.get('genre'), m.get('director')]
+                  if str(v).strip() in ('Unknown', '?', '', 'None'))
+    return unknown >= 2
+
+def _find_intersection(plex_movies, lb_movies):
+    """Tag each movie with on_plex / on_lb flags for intersection highlighting."""
+    lb_keys = {m['title'].lower().strip() for m in lb_movies}
+    px_keys = {m['title'].lower().strip() for m in plex_movies}
+    for m in plex_movies:
+        m['on_plex'] = True
+        m['on_lb']   = m['title'].lower().strip() in lb_keys
+    for m in lb_movies:
+        m['on_lb']   = True
+        m['on_plex'] = m['title'].lower().strip() in px_keys
+    shared = sum(1 for m in plex_movies if m.get('on_lb'))
+    #print(f"[Intersection] {shared} movies on both Plex and LB watchlist")
 
 # ── KV ────────────────────────────────────────────────────────────────────────
 KV = """
@@ -334,31 +811,103 @@ KV = """
 """
 Builder.load_string(KV)
 
-# ── TMDB Poster Fetch ─────────────────────────────────────────────────────────
+# ── TMDB Enrichment ───────────────────────────────────────────────────────────
+_TMDB_COUNTRY = {
+    'United States of America': 'US', 'United Kingdom': 'UK',
+    'Japan': 'JP', 'South Korea': 'KR', 'France': 'FR',
+    'Germany': 'DE', 'Italy': 'IT', 'Spain': 'ES', 'Australia': 'AU',
+    'Canada': 'CA', 'Sweden': 'SE', 'Denmark': 'DK', 'Norway': 'NO',
+    'Mexico': 'MX', 'Brazil': 'BR', 'India': 'IN', 'China': 'CN',
+}
+
 def fetch_tmdb_posters_async(movies, api_key, on_done):
-    """Fetch missing poster_url fields via TMDB search for each movie."""
+    """Back-compat: delegates to full enrichment."""
+    fetch_tmdb_enrich_async(movies, api_key, on_done)
+
+def fetch_tmdb_enrich_async(movies, api_key, on_done):
+    """Enrich movies using TMDB: fills poster, runtime, genre, director, country, year.
+       After enrichment, filters bad data from the global lists."""
     def run():
-        base = "https://api.themoviedb.org/3/search/movie"
-        img  = "https://image.tmdb.org/t/p/w342"
-        updated = False
+        search  = "https://api.themoviedb.org/3/search/movie"
+        detail  = "https://api.themoviedb.org/3/movie"
+        img     = "https://image.tmdb.org/t/p/w342"
+
+        _ctx = ssl._create_unverified_context()
         for m in movies:
-            if m.get('poster_url'):
+            needs = (
+                not m.get('poster_url') or
+                m.get('runtime', 0) < 1 or
+                m.get('genre') in ('Unknown', '?', '', None) or
+                m.get('director') in ('Unknown', '?', '', None) or
+                not m.get('year')
+            )
+            if not needs:
                 continue
+
             try:
-                title = urllib.parse.quote(m['title'])
-                year  = m.get('year', '')
-                url   = f"{base}?api_key={api_key}&query={title}&year={year}"
-                req   = urllib.request.Request(url, headers={'Accept': 'application/json'})
-                with urllib.request.urlopen(req, timeout=10) as r:
-                    data = json.loads(r.read())
-                results = data.get('results', [])
-                if results and results[0].get('poster_path'):
-                    m['poster_url'] = img + results[0]['poster_path']
-                    updated = True
-            except Exception:
+                t   = urllib.parse.quote(m['title'])
+                yr  = m.get('year', '')
+                url = f"{search}?api_key={api_key}&query={t}&year={yr}&language=en-US"
+                req = urllib.request.Request(url, headers={'Accept': 'application/json'})
+                with urllib.request.urlopen(req, timeout=10, context=_ctx) as r:
+                    results = json.loads(r.read()).get('results', [])
+
+                if not results:
+                    #print(f"[TMDB] No results for {m['title']!r}")
+                    continue
+
+                top = results[0]
+                tmdb_id = top.get('id')
+
+                if not m.get('poster_url') and top.get('poster_path'):
+                    m['poster_url'] = img + top['poster_path']
+                if not m.get('year') and top.get('release_date'):
+                    try: m['year'] = int(top['release_date'][:4])
+                    except Exception: pass
+
+                if tmdb_id and (m.get('runtime', 0) < 1 or
+                                m.get('genre') in ('Unknown', '?', '', None) or
+                                m.get('director') in ('Unknown', '?', '', None)):
+                    durl = f"{detail}/{tmdb_id}?api_key={api_key}&append_to_response=credits"
+                    req2 = urllib.request.Request(durl, headers={'Accept': 'application/json'})
+                    with urllib.request.urlopen(req2, timeout=10, context=_ctx) as r2:
+                        d = json.loads(r2.read())
+
+                    rt = d.get('runtime', 0)
+                    if rt > 0 and m.get('runtime', 0) < 1:
+                        m['runtime'] = rt
+
+                    genres = d.get('genres', [])
+                    if genres and m.get('genre') in ('Unknown', '?', '', None):
+                        m['genre'] = genres[0]['name']
+
+                    crew = d.get('credits', {}).get('crew', [])
+                    dirs = [c['name'] for c in crew if c.get('job') == 'Director']
+                    if dirs and m.get('director') in ('Unknown', '?', '', None):
+                        m['director'] = dirs[0]
+
+                    if m.get('country') in ('?', '', None):
+                        pcs = d.get('production_countries', [])
+                        if pcs:
+                            raw = pcs[0].get('name', '')
+                            m['country'] = _TMDB_COUNTRY.get(raw, raw[:2].upper() if raw else '?')
+
+                #print(f"[TMDB] Enriched {m['title']!r}: rt={m.get('runtime')} genre={m.get('genre')}")
+
+            except Exception as e:
+                #print(f"[TMDB] Error for {m['title']!r}: {e}")
                 pass
-        if updated:
-            Clock.schedule_once(lambda dt: on_done(), 0)
+
+        # Filter bad data out of global lists
+        global _plex_movies, _lb_movies
+        before_px = len(_plex_movies)
+        before_lb = len(_lb_movies)
+        _plex_movies = [m for m in _plex_movies if not _is_bad_movie(m)]
+        _lb_movies   = [m for m in _lb_movies   if not _is_bad_movie(m)]
+        #print(f"[TMDB] Filtered: plex {before_px}→{len(_plex_movies)}, lb {before_lb}→{len(_lb_movies)}")
+
+        Clock.schedule_once(lambda dt: on_done(), 0)
+
     threading.Thread(target=run, daemon=True).start()
 
 # ── Emoji helper ──────────────────────────────────────────────────────────────
@@ -407,7 +956,7 @@ class PosterWidget(FloatLayout):
         url = movie.get('poster_url')
         if url:
             self.add_widget(AsyncImage(source=url, allow_stretch=True,
-                                       keep_ratio=True, size_hint=(1, 1)))
+                                       keep_ratio=False, size_hint=(1, 1)))
         else:
             cc     = movie.get('country', '?')
             rating = movie.get('rating', 0)
@@ -422,39 +971,47 @@ class PosterWidget(FloatLayout):
         self._bg.size = self.size
 
 
-class MoviePosterCard(FloatLayout):
-    """Poster tile: image fills card, title overlaid at bottom (Recommend-style)."""
+class MoviePosterCard(RelativeLayout):
+    """Poster tile: image fills card, title overlaid at bottom."""
     def __init__(self, movie, on_tap=None, show_lb_badge=False, **kwargs):
+        on_plex = movie.get('on_plex', movie.get('source') == 'plex')
+        on_lb   = movie.get('on_lb',   movie.get('source') == 'letterboxd')
+        if on_plex and on_lb:
+            badge_text, badge_color = "Plex + LB", GREEN
+        elif on_lb and not on_plex:
+            badge_text, badge_color = "LB Only", GOLD
+        elif on_plex and not on_lb:
+            badge_text, badge_color = "Plex", ACCENT2
+        else:
+            badge_text, badge_color = ("LB · Not on Plex" if show_lb_badge else None), GOLD
+
         super().__init__(size_hint=(None, None),
                          size=(dp(120), dp(200)), **kwargs)
         self._on_tap     = on_tap
         self._movie      = movie
         self._touch_down = None
 
-        # Solid background colour — shown while image loads or when no poster
+        # In RelativeLayout, canvas coords are relative to self — (0,0) = our bottom-left
         with self.canvas.before:
             Color(*movie.get('poster_color', CARD))
-            self._bg = Rectangle(pos=self.pos, size=self.size)
-        self.bind(pos=self._upd_bg, size=self._upd_bg)
+            self._bg = Rectangle(pos=(0, 0), size=self.size)
+        self.bind(size=self._upd_bg)
 
-        # Poster image — only added when URL exists; no fallback content (avoids artifact)
         url = movie.get('poster_url')
         if url:
             self.add_widget(AsyncImage(
-                source=url, allow_stretch=True, keep_ratio=True,
+                source=url, allow_stretch=True, keep_ratio=False,
                 size_hint=(1, 1), pos_hint={'x': 0, 'y': 0}))
 
-        # Semi-translucent title overlay pinned to the bottom
-        overlay_h = dp(58) if show_lb_badge else dp(44)
+        overlay_h = dp(58) if badge_text else dp(44)
         overlay = BoxLayout(orientation='vertical',
                             size_hint=(1, None), height=overlay_h,
                             pos_hint={'x': 0, 'y': 0},
                             padding=[dp(4), dp(4)])
         with overlay.canvas.before:
             Color(0, 0, 0, 0.65)
-            self._ov = Rectangle(pos=overlay.pos, size=overlay.size)
-        overlay.bind(pos=lambda w, _: self._upd_ov(w),
-                     size=lambda w, _: self._upd_ov(w))
+            self._ov = Rectangle(pos=(0, 0), size=overlay.size)
+        overlay.bind(size=self._upd_ov)
 
         title_lbl = Label(text=movie['title'], font_size=dp(9), color=TEXT,
                           halign='center', valign='middle',
@@ -462,8 +1019,8 @@ class MoviePosterCard(FloatLayout):
         title_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
         overlay.add_widget(title_lbl)
 
-        if show_lb_badge:
-            badge = Label(text="LB · Not on Plex", font_size=dp(7), color=GOLD,
+        if badge_text:
+            badge = Label(text=badge_text, font_size=dp(7), color=badge_color,
                           size_hint=(1, None), height=dp(12),
                           halign='center', valign='middle')
             overlay.add_widget(badge)
@@ -471,14 +1028,13 @@ class MoviePosterCard(FloatLayout):
         self.add_widget(overlay)
 
     def _upd_bg(self, *_):
-        self._bg.pos  = self.pos
         self._bg.size = self.size
 
-    def _upd_ov(self, w):
+    def _upd_ov(self, w, size):
         w.canvas.before.clear()
         with w.canvas.before:
             Color(0, 0, 0, 0.65)
-            Rectangle(pos=w.pos, size=w.size)
+            Rectangle(pos=(0, 0), size=size)
 
     def on_touch_down(self, touch):
         if self.collide_point(*touch.pos):
@@ -518,6 +1074,151 @@ class FilterChip(ToggleButton):
         else:
             self.background_color = CARD
             self.color = SUBTEXT
+
+# ── Loading Screen ────────────────────────────────────────────────────────────
+class LoadingScreen(Screen):
+    """Shown on launch when credentials exist — preloads all data before continuing."""
+    def __init__(self, on_ready, **kwargs):
+        super().__init__(**kwargs)
+        self._on_ready   = on_ready
+        self._done_count = [0]
+        self._total      = [0]
+        self._lb_stats   = {}
+        self._msgs       = []
+        self._build_ui()
+
+    def _build_ui(self):
+        root = BoxLayout(orientation='vertical', padding=dp(32), spacing=dp(20))
+        with root.canvas.before:
+            Color(*BG)
+            Rectangle(pos=root.pos, size=root.size)
+        root.add_widget(Widget(size_hint_y=0.25))
+
+        title = Label(text="[b]CineQueue[/b]", markup=True,
+                      font_size=dp(36), color=ACCENT,
+                      size_hint_y=None, height=dp(54),
+                      halign='center', valign='middle')
+        title.bind(size=lambda w, s: setattr(w, 'text_size', s))
+        root.add_widget(title)
+
+        sub = Label(text="Loading your movies…", font_size=dp(13), color=SUBTEXT,
+                    size_hint_y=None, height=dp(30),
+                    halign='center', valign='middle')
+        sub.bind(size=lambda w, s: setattr(w, 'text_size', s))
+        root.add_widget(sub)
+
+        self._status_lbl = Label(text="", font_size=dp(11), color=GOLD,
+                                  size_hint_y=None, height=dp(72),
+                                  halign='center', valign='top')
+        self._status_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
+        root.add_widget(self._status_lbl)
+
+        root.add_widget(Widget())
+        self.add_widget(root)
+
+    def _log(self, msg):
+        #print(f"[Loading] {msg}")
+        self._msgs.append(msg)
+        self._status_lbl.text = '\n'.join(self._msgs[-4:])
+
+    def start(self, plex_url, plex_token, lb_username, tmdb_key, cached_plex=None, cached_lb=None):
+        """Fetch fresh data. If cached_* lists are provided, only TMDB-enrich new movies."""
+        self._tmdb_key    = tmdb_key
+        self._cached_plex = cached_plex or []
+        self._cached_lb   = cached_lb   or []
+        sources = []
+        if plex_url and plex_token:
+            sources.append('plex')
+        if lb_username:
+            sources.append('lb')
+        self._total[0] = len(sources)
+
+        if not sources:
+            Clock.schedule_once(lambda dt: self._finish(), 0.2)
+            return
+
+        if 'plex' in sources:
+            self._log("Syncing Plex…" if self._cached_plex else "Connecting to Plex…")
+            fetch_plex_async(
+                plex_url, plex_token,
+                on_done=self._on_plex_done,
+                on_error=self._on_plex_err)
+
+        if 'lb' in sources:
+            self._log("Syncing Letterboxd…" if self._cached_lb else "Loading Letterboxd watchlist…")
+            fetch_lb_async(
+                lb_username,
+                on_done=self._on_lb_done,
+                on_error=self._on_lb_err)
+            fetch_lb_stats_async(
+                lb_username,
+                on_done=self._on_lb_stats_done,
+                on_error=lambda e: None)
+
+    def _on_plex_done(self, movies):
+        global _plex_movies
+        merged, new = MovieCache.merge(self._cached_plex, movies)
+        _plex_movies = merged
+        self._new_plex = new
+        self._log(f"Plex: {len(merged)} movies (+{len(new)} new)")
+        self._check_done()
+
+    def _on_plex_err(self, e):
+        self._log(f"Plex error: {e}")
+        # Keep cached data on error
+        if self._cached_plex:
+            self._new_plex = []
+            self._log("Using cached Plex data")
+        self._check_done()
+
+    def _on_lb_done(self, movies):
+        global _lb_movies
+        merged, new = MovieCache.merge(self._cached_lb, movies)
+        _lb_movies = merged
+        self._new_lb = new
+        self._log(f"Letterboxd: {len(merged)} movies (+{len(new)} new)")
+        self._check_done()
+
+    def _on_lb_err(self, e):
+        self._log(f"LB error: {e}")
+        if self._cached_lb:
+            self._new_lb = []
+            self._log("Using cached Letterboxd data")
+        self._check_done()
+
+    def _on_lb_stats_done(self, stats):
+        global _lb_stats
+        _lb_stats = stats
+        #print(f"[Loading] LB stats: {stats}")
+
+    def _check_done(self):
+        self._done_count[0] += 1
+        if self._done_count[0] >= self._total[0]:
+            _find_intersection(_plex_movies, _lb_movies)
+            tmdb_key  = getattr(self, '_tmdb_key', '')
+            new_plex  = getattr(self, '_new_plex', _plex_movies)
+            new_lb    = getattr(self, '_new_lb',   _lb_movies)
+            new_movies = new_plex + new_lb
+            if tmdb_key and new_movies:
+                self._log(f"Enriching {len(new_movies)} new movies via TMDB…")
+                fetch_tmdb_enrich_async(new_movies, tmdb_key, self._on_tmdb_done)
+            else:
+                if tmdb_key and not new_movies:
+                    self._log("All movies up to date.")
+                self._save_and_finish()
+
+    def _on_tmdb_done(self):
+        self._log("Ready!")
+        self._save_and_finish()
+
+    def _save_and_finish(self):
+        MovieCache.save(_plex_movies, _lb_movies, _lb_stats)
+        self._finish()
+
+    def _finish(self):
+        _notify_refresh()
+        Clock.schedule_once(lambda dt: self._on_ready(), 0.4)
+
 
 # ── Watch Screen ──────────────────────────────────────────────────────────────
 class WatchScreen(Screen):
@@ -1054,11 +1755,18 @@ class AnalyticsScreen(Screen):
         watched_outside_watchlist = sum(
             1 for e in MOCK_WATCHED if e['title'] not in watchlist_titles)
 
+        # Live LB stats (scraped from profile)
+        lb_total_watched   = _lb_stats.get('total_films', None)
+        lb_watched_yr      = _lb_stats.get('watched_this_year', None)
+        on_both            = sum(1 for m in _plex_movies if m.get('on_lb'))
+
+        lb_total_str = str(lb_total_watched) if lb_total_watched is not None else f"{total_w}*"
+        lb_yr_str    = str(lb_watched_yr)   if lb_watched_yr   is not None else f"{from_watchlist_this_year}*"
         stats = [
-            ("Watched",   str(total_w),          GREEN),
-            ("Unwatched", str(total_uw),          ACCENT),
-            ("On Plex",   str(len(_plex_movies)), ACCENT2),
-            ("LB Only",   str(len(_lb_movies)),   GOLD),
+            ("LB Watched",    lb_total_str,          GREEN),
+            (f"This Year",    lb_yr_str,             ACCENT2),
+            ("On Plex",       str(len(_plex_movies)), ACCENT2),
+            ("Plex + LB",     str(on_both),           GOLD),
         ]
         stat_row = BoxLayout(size_hint_y=None, height=dp(80), spacing=dp(8))
         for label, val, color in stats:
@@ -1198,10 +1906,13 @@ class AnalyticsScreen(Screen):
 class SettingsScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._inputs     = {}   # key -> TextInput
-        self._status_lbl = None
+        self._inputs      = {}   # key -> TextInput
+        self._status_lbl  = None
+        self._autosave_ev = None
         self._build_ui()
-        Clock.schedule_once(lambda dt: self._load_values(), 0.1)
+
+    def on_enter(self):
+        self._load_values()
 
     def _build_ui(self):
         root = BoxLayout(orientation='vertical')
@@ -1232,9 +1943,12 @@ class SettingsScreen(Screen):
             ("LETTERBOXD", [
                 ("lb_username", "Username", "@yourusername", False),
             ]),
-            ("DOCKER SERVICES", [
-                ("prowlarr_url",    "Prowlarr URL",    "http://localhost:9696", False),
-                ("qbit_url",        "qBittorrent URL", "http://localhost:8080", False),
+            ("SYNOLOGY NAS (Services)", [
+                ("dsm_port",      "DSM Port",           "5000",                False),
+                ("dsm_username",  "NAS Username",       "admin",               False),
+                ("dsm_password",  "NAS Password",       "your password",       True),
+                ("qbit_project",  "VPN+qBit Project",   "qbittorent-gluetun",  False),
+                ("arr_project",   "Arr Stack Project",  "arr-apps",            False),
             ]),
             ("TMDB (Movie Posters)", [
                 ("tmdb_key", "API Key", "Get free key at themoviedb.org", False),
@@ -1263,35 +1977,54 @@ class SettingsScreen(Screen):
                 row.add_widget(inp)
                 inner.add_widget(row)
 
-        # Docker control
-        inner.add_widget(SectionLabel(text="DOCKER CONTROL"))
-        docker_note = Label(
-            text="Start/stop your Plex, Prowlarr, and qBittorrent containers.",
-            font_size=dp(10), color=SUBTEXT, size_hint_y=None, height=dp(30),
+        # Services control
+        inner.add_widget(SectionLabel(text="SERVICE CONTROL"))
+        svc_note = Label(
+            text="NAS IP is read from your Plex URL. Requires DSM API Key above.",
+            font_size=dp(10), color=SUBTEXT, size_hint_y=None, height=dp(24),
             halign='left', valign='middle')
-        docker_note.bind(size=lambda w, s: setattr(w, 'text_size', s))
-        inner.add_widget(docker_note)
+        svc_note.bind(size=lambda w, s: setattr(w, 'text_size', s))
+        inner.add_widget(svc_note)
 
-        docker_row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
-        start_btn = Button(text=f"{E('🎬')} Start All", markup=True,
-                           background_normal="",
-                           background_color=GREEN, color=TEXT,
-                           font_size=dp(12), bold=True)
-        stop_btn  = Button(text=f"{E('🕐')} Stop All", markup=True,
-                           background_normal="",
-                           background_color=ACCENT, color=TEXT,
-                           font_size=dp(12), bold=True)
-        start_btn.bind(on_press=lambda *_: self._docker_action("start"))
-        stop_btn.bind(on_press=lambda *_: self._docker_action("stop"))
-        docker_row.add_widget(start_btn)
-        docker_row.add_widget(stop_btn)
-        inner.add_widget(docker_row)
+        self._svc_rows = {}  # service_key -> {'status_lbl': Label}
+        for svc_key, svc_label in [('plex',      'Plex Media Server'),
+                                    ('qbit_proj', 'VPN + qBittorrent'),
+                                    ('arr_proj',  'Prowlarr / Sonarr / Radarr')]:
+            row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
+            name_lbl = Label(text=svc_label, font_size=dp(11), color=TEXT,
+                             size_hint_x=0.32, halign='left', valign='middle')
+            name_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
+            status_lbl = Label(text="●  unknown", font_size=dp(10), color=SUBTEXT,
+                               size_hint_x=0.28, halign='left', valign='middle')
+            status_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
+            start_b = Button(text="Start", font_size=dp(10),
+                             size_hint_x=0.2, background_normal="",
+                             background_color=GREEN, color=TEXT)
+            stop_b  = Button(text="Stop",  font_size=dp(10),
+                             size_hint_x=0.2, background_normal="",
+                             background_color=ACCENT, color=TEXT)
+            _key = svc_key
+            start_b.bind(on_press=lambda *_, k=_key: self._svc_action(k, 'start'))
+            stop_b.bind( on_press=lambda *_, k=_key: self._svc_action(k, 'stop'))
+            row.add_widget(name_lbl)
+            row.add_widget(status_lbl)
+            row.add_widget(start_b)
+            row.add_widget(stop_b)
+            inner.add_widget(row)
+            self._svc_rows[svc_key] = {'status_lbl': status_lbl}
 
-        self._docker_status = Label(
-            text="Docker: status unknown", font_size=dp(10), color=SUBTEXT,
+        refresh_btn = Button(text="Refresh Status", font_size=dp(11),
+                             size_hint_y=None, height=dp(36),
+                             background_normal="", background_color=CARD,
+                             color=ACCENT2)
+        refresh_btn.bind(on_press=lambda *_: self._refresh_svc_status())
+        inner.add_widget(refresh_btn)
+
+        self._svc_status_lbl = Label(
+            text="", font_size=dp(10), color=SUBTEXT,
             size_hint_y=None, height=dp(24), halign='left', valign='middle')
-        self._docker_status.bind(size=lambda w, s: setattr(w, 'text_size', s))
-        inner.add_widget(self._docker_status)
+        self._svc_status_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
+        inner.add_widget(self._svc_status_lbl)
 
         save_btn = Button(text=f"{E('💾')} Save & Connect", markup=True,
                           size_hint_y=None, height=dp(48),
@@ -1310,15 +2043,117 @@ class SettingsScreen(Screen):
             val = Settings.get(key, '')
             if val:
                 inp.text = val
+            inp.bind(text=self._on_field_change)
+
+    def _on_field_change(self, *_):
+        # Debounced auto-save: write to disk 1s after the last keystroke
+        if hasattr(self, '_autosave_ev') and self._autosave_ev:
+            self._autosave_ev.cancel()
+        self._autosave_ev = Clock.schedule_once(self._autosave, 1.0)
+
+    def _autosave(self, *_):
+        data = {key: inp.text.strip() for key, inp in self._inputs.items()}
+        Settings.save(data)
+        self.set_status("Auto-saved", SUBTEXT)
 
     def set_status(self, msg, color=GOLD):
         if self._status_lbl:
             self._status_lbl.text  = msg
             self._status_lbl.color = color
 
-    def _docker_action(self, action):
-        self._docker_status.text  = f"Docker: '{action}' sent (not yet implemented)"
-        self._docker_status.color = GOLD
+    def _make_syno_client(self):
+        plex_url = Settings.get('plex_url', '')
+        nas_ip   = _nas_ip_from_plex_url(plex_url)
+        port     = Settings.get('dsm_port', '5000') or '5000'
+        username = Settings.get('dsm_username', '')
+        password = Settings.get('dsm_password', '')
+        if not nas_ip or not username or not password:
+            return None, "Set Plex URL + NAS username & password first"
+        return SynologyClient(nas_ip, port, username, password), None
+
+    def _set_svc_status(self, key, text, color):
+        if key in self._svc_rows:
+            self._svc_rows[key]['status_lbl'].text  = text
+            self._svc_rows[key]['status_lbl'].color = color
+
+    def _svc_action(self, key, action):
+        client, err = self._make_syno_client()
+        if not client:
+            self._svc_status_lbl.text  = err
+            self._svc_status_lbl.color = ACCENT
+            return
+        self._set_svc_status(key, f"● {action}ing…", GOLD)
+
+        def on_done(result):
+            success = result.get('success', False)
+            if success:
+                self._set_svc_status(key, "● running" if action == 'start' else "● stopped",
+                                     GREEN if action == 'start' else SUBTEXT)
+            else:
+                err_code = result.get('error', {}).get('code', '?')
+                self._set_svc_status(key, f"● error {err_code}", ACCENT)
+
+        def on_error(e):
+            msg = "● timed out" if 'timed out' in str(e).lower() or 'timeout' in str(e).lower() else "● error"
+            self._set_svc_status(key, msg, ACCENT)
+            self._svc_status_lbl.text  = f"{key}: {e}"
+            self._svc_status_lbl.color = ACCENT
+
+        if key == 'plex':
+            fn = client.plex_start if action == 'start' else client.plex_stop
+        elif key == 'qbit_proj':
+            proj = Settings.get('qbit_project') or 'qbittorrent-gluetun'
+            fn = (lambda p=proj: client.project_start(p)) if action == 'start' \
+                 else (lambda p=proj: client.project_stop(p))
+        else:  # arr_proj
+            proj = Settings.get('arr_project') or 'arr-apps'
+            fn = (lambda p=proj: client.project_start(p)) if action == 'start' \
+                 else (lambda p=proj: client.project_stop(p))
+
+        syno_action_async(fn, on_done, on_error)
+
+    def _refresh_svc_status(self):
+        client, err = self._make_syno_client()
+        if not client:
+            self._svc_status_lbl.text  = err
+            self._svc_status_lbl.color = ACCENT
+            return
+        for key in ('plex', 'qbit_proj', 'arr_proj'):
+            self._set_svc_status(key, "● checking…", GOLD)
+
+        def check_all():
+            try:
+                status = client.plex_status()
+                color  = GREEN if 'running' in status.lower() else SUBTEXT
+                Clock.schedule_once(lambda dt, s=status, c=color:
+                    self._set_svc_status('plex', f"● {s}", c), 0)
+            except Exception:
+                Clock.schedule_once(lambda dt:
+                    self._set_svc_status('plex', '● unreachable', ACCENT), 0)
+
+            projects  = client._list_projects()
+            nas_ip    = client._nas_ip
+            qbit_proj = Settings.get('qbit_project') or 'qbittorrent-gluetun'
+            arr_proj  = Settings.get('arr_project')  or 'arr-apps'
+
+            for key, proj_name in [('qbit_proj', qbit_proj), ('arr_proj', arr_proj)]:
+                try:
+                    status = client.project_status_from_list(proj_name, projects, nas_ip=nas_ip)
+                    is_up  = status == 'running' or status.startswith('partial')
+                    color  = GREEN if status == 'running' else (
+                             GOLD  if status.startswith('partial') else SUBTEXT)
+                    short  = status if len(status) <= 18 else status[:18] + '…'
+                    Clock.schedule_once(
+                        lambda dt, k=key, s=short, c=color:
+                            self._set_svc_status(k, f"● {s}", c), 0)
+                except Exception as e:
+                    Clock.schedule_once(
+                        lambda dt, k=key, e=str(e): (
+                            self._set_svc_status(k, '● error', ACCENT),
+                            setattr(self._svc_status_lbl, 'text', f"{k}: {e}"),
+                            setattr(self._svc_status_lbl, 'color', ACCENT)), 0)
+
+        threading.Thread(target=check_all, daemon=True).start()
 
     def _save(self, *_):
         data = {key: inp.text.strip() for key, inp in self._inputs.items()}
@@ -1452,12 +2287,94 @@ class WelcomeScreen(Screen):
             self._on_connect(skip=False)
 
 
+# ── Background Syncer ─────────────────────────────────────────────────────────
+class _BackgroundSyncer:
+    """Fetches fresh data silently without a loading screen.
+    Merges with cached data, TMDB-enriches only new movies, saves cache."""
+
+    def __init__(self, plex_url, plex_token, lb_username, tmdb_key,
+                 cached_plex, cached_lb, on_done):
+        self._plex_url    = plex_url
+        self._plex_token  = plex_token
+        self._lb_username = lb_username
+        self._tmdb_key    = tmdb_key
+        self._cached_plex = cached_plex
+        self._cached_lb   = cached_lb
+        self._on_done     = on_done
+        self._done_count  = [0]
+        self._total       = [0]
+        self._new_plex    = []
+        self._new_lb      = []
+
+    def run(self):
+        sources = []
+        if self._plex_url and self._plex_token:
+            sources.append('plex')
+        if self._lb_username:
+            sources.append('lb')
+        self._total[0] = len(sources)
+        if not sources:
+            return
+
+        if 'plex' in sources:
+            fetch_plex_async(self._plex_url, self._plex_token,
+                             on_done=self._on_plex, on_error=self._on_plex_err)
+        if 'lb' in sources:
+            fetch_lb_async(self._lb_username,
+                           on_done=self._on_lb, on_error=self._on_lb_err)
+            fetch_lb_stats_async(self._lb_username,
+                                 on_done=self._on_lb_stats, on_error=lambda e: None)
+
+    def _on_plex(self, movies):
+        global _plex_movies
+        merged, new = MovieCache.merge(self._cached_plex, movies)
+        _plex_movies   = merged
+        self._new_plex = new
+        self._check()
+
+    def _on_plex_err(self, e):
+        #print(f"[BgSync] Plex error: {e}")
+        self._check()
+
+    def _on_lb(self, movies):
+        global _lb_movies
+        merged, new = MovieCache.merge(self._cached_lb, movies)
+        _lb_movies   = merged
+        self._new_lb = new
+        self._check()
+
+    def _on_lb_err(self, e):
+        #print(f"[BgSync] LB error: {e}")
+        self._check()
+
+    def _on_lb_stats(self, stats):
+        global _lb_stats
+        _lb_stats = stats
+
+    def _check(self):
+        self._done_count[0] += 1
+        if self._done_count[0] < self._total[0]:
+            return
+        _find_intersection(_plex_movies, _lb_movies)
+        new_movies = self._new_plex + self._new_lb
+        if self._tmdb_key and new_movies:
+            #print(f"[BgSync] TMDB-enriching {len(new_movies)} new movies")
+            fetch_tmdb_enrich_async(new_movies, self._tmdb_key, self._finish)
+        else:
+            self._finish()
+
+    def _finish(self):
+        MovieCache.save(_plex_movies, _lb_movies, _lb_stats)
+        Clock.schedule_once(lambda dt: self._on_done(), 0)
+
+
 # ── App ───────────────────────────────────────────────────────────────────────
 class CineQueueApp(App):
+    _REFRESH_INTERVAL = 120  # seconds between background syncs
+
     def build(self):
         Window.clearcolor = BG
 
-        # Register NotoEmoji so [font=NotoEmoji]...[/font] markup works
         font_path = resource_find('NotoEmoji-Regular.ttf') or 'NotoEmoji-Regular.ttf'
         LabelBase.register('NotoEmoji', fn_regular=font_path)
 
@@ -1466,65 +2383,111 @@ class CineQueueApp(App):
         self._sm              = ScreenManager(transition=SlideTransition())
         self._settings_screen = SettingsScreen(name='settings')
         self._watch_screen    = WatchScreen(name='watch')
+        self._refresh_timer   = None
 
         has_creds = bool(Settings.get('plex_url') or Settings.get('lb_username'))
 
-        if not has_creds:
-            welcome = WelcomeScreen(name='welcome', on_connect=self._on_welcome_done)
-            self._sm.add_widget(welcome)
-            self._sm.current = 'welcome'
-
+        # Add main screens
         for s in [self._watch_screen,
                   RecommendScreen(name='recommend'),
                   AnalyticsScreen(name='analytics'),
                   self._settings_screen]:
             self._sm.add_widget(s)
 
-        if has_creds:
-            self._sm.current = 'watch'
-
         self._nav = NavBar(manager=self._sm)
-        # Hide nav during welcome screen
         self._nav.size_hint_y = None
-        self._nav.height      = dp(0) if not has_creds else dp(56)
+        self._nav.height      = dp(0)  # hidden until ready
 
         root = BoxLayout(orientation='vertical')
         root.add_widget(self._sm)
         root.add_widget(self._nav)
 
         if has_creds:
-            self._auto_connect()
+            # Try loading from cache first
+            cached_plex, cached_lb, cached_stats = MovieCache.load()
+            if cached_plex or cached_lb:
+                # Populate globals from cache and show app immediately
+                global _plex_movies, _lb_movies, _lb_stats
+                _plex_movies = cached_plex
+                _lb_movies   = cached_lb
+                _lb_stats    = cached_stats
+                _find_intersection(_plex_movies, _lb_movies)
+                self._sm.current = 'watch'
+                self._nav.height = dp(56)
+                # Background sync shortly after launch, then every 2 minutes
+                Clock.schedule_once(lambda dt: self._background_sync(), 2.0)
+                Clock.schedule_once(lambda dt: self._start_refresh_timer(), 3.0)
+            else:
+                # First launch — show loading screen
+                loading = LoadingScreen(name='loading', on_ready=self._on_load_done)
+                self._sm.add_widget(loading)
+                self._sm.current = 'loading'
+                plex_url   = Settings.get('plex_url')
+                plex_token = Settings.get('plex_token')
+                lb_user    = Settings.get('lb_username')
+                tmdb_key   = Settings.get('tmdb_key')
+                Clock.schedule_once(
+                    lambda dt: loading.start(plex_url, plex_token, lb_user, tmdb_key), 0.3)
+        else:
+            welcome = WelcomeScreen(name='welcome', on_connect=self._on_welcome_done)
+            self._sm.add_widget(welcome)
+            self._sm.current = 'welcome'
 
         return root
 
-    def _on_welcome_done(self, skip=False):
-        self._sm.current   = 'watch'
-        self._nav.height   = dp(56)
-        if not skip:
-            plex_url   = Settings.get('plex_url')
-            plex_token = Settings.get('plex_token')
-            lb_user    = Settings.get('lb_username')
-            if plex_url and plex_token:
-                Clock.schedule_once(
-                    lambda dt: self._settings_screen._fetch_plex(plex_url, plex_token), 0.5)
-            if lb_user:
-                Clock.schedule_once(
-                    lambda dt: self._settings_screen._fetch_lb(lb_user), 1)
+    def _on_load_done(self):
+        #print("[App] Loading done — switching to watch screen")
+        self._sm.current = 'watch'
+        self._nav.height = dp(56)
+        # Start periodic refresh
+        self._start_refresh_timer()
 
-    def _auto_connect(self):
+    def _start_refresh_timer(self):
+        if self._refresh_timer:
+            self._refresh_timer.cancel()
+        self._refresh_timer = Clock.schedule_interval(
+            lambda dt: self._background_sync(), self._REFRESH_INTERVAL)
+
+    def _background_sync(self):
+        """Silently fetch fresh data in background, only TMDB-enrich new movies."""
         plex_url   = Settings.get('plex_url')
         plex_token = Settings.get('plex_token')
         lb_user    = Settings.get('lb_username')
         tmdb_key   = Settings.get('tmdb_key')
-        if plex_url and plex_token:
-            Clock.schedule_once(
-                lambda dt: self._settings_screen._fetch_plex(plex_url, plex_token), 1)
-        if lb_user:
-            Clock.schedule_once(
-                lambda dt: self._settings_screen._fetch_lb(lb_user), 1.5)
-        if tmdb_key:
-            Clock.schedule_once(
-                lambda dt: self._settings_screen._fetch_tmdb_posters(tmdb_key), 2)
+        if not (plex_url or lb_user):
+            return
+        #print("[App] Background sync starting…")
+        # Reuse the LoadingScreen logic but silently (no visible loading screen)
+        syncer = _BackgroundSyncer(
+            plex_url, plex_token, lb_user, tmdb_key,
+            cached_plex=list(_plex_movies),
+            cached_lb=list(_lb_movies),
+            on_done=self._on_bg_sync_done)
+        syncer.run()
+
+    def _on_bg_sync_done(self):
+        #print("[App] Background sync done")
+        _notify_refresh()
+        if not self._refresh_timer:
+            self._start_refresh_timer()
+
+    def _on_welcome_done(self, skip=False):
+        if skip:
+            self._sm.current = 'watch'
+            self._nav.height = dp(56)
+            return
+        # After welcome: use loading screen to preload
+        plex_url   = Settings.get('plex_url')
+        plex_token = Settings.get('plex_token')
+        lb_user    = Settings.get('lb_username')
+        tmdb_key   = Settings.get('tmdb_key')
+        if 'loading' not in [s.name for s in self._sm.screens]:
+            loading = LoadingScreen(name='loading', on_ready=self._on_load_done)
+            self._sm.add_widget(loading)
+        self._sm.current = 'loading'
+        loading = self._sm.get_screen('loading')
+        Clock.schedule_once(
+            lambda dt: loading.start(plex_url, plex_token, lb_user, tmdb_key), 0.2)
 
 
 if __name__ == '__main__':
