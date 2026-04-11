@@ -1446,8 +1446,10 @@ def fetch_tmdb_enrich_async(movies, api_key, on_done):
 
 # ── Emoji helper ──────────────────────────────────────────────────────────────
 def E(s):
-    """Wrap text in NotoEmoji font markup for Kivy labels with markup=True."""
-    return f"[font=NotoEmoji]{s}[/font]"
+    """No-op: previously wrapped in NotoEmoji markup which breaks on Android
+    (FreeType in p4a does not support CBDT/CBLC color bitmap tables).
+    Returns the raw string — callers should use plain BMP symbols instead."""
+    return s
 
 # ── Shared Widgets ────────────────────────────────────────────────────────────
 # Flag emoji use Regional Indicator pairs — NotoEmoji renders each indicator
@@ -1754,7 +1756,7 @@ class PosterWidget(FloatLayout):
         else:
             cc     = movie.get('country', '?')
             rating = movie.get('rating', 0)
-            text   = f"{cc}\n{E('⭐')} {rating:.1f}" if rating else cc
+            text   = f"{cc}\n★ {rating:.1f}" if rating else cc
             self.add_widget(Label(
                 text=text, markup=True, font_size=dp(18),
                 bold=True, color=TEXT,
@@ -2375,7 +2377,11 @@ class RecommendScreen(Screen):
             self._show_card()
 
     def _build_ui(self):
-        root = FloatLayout()
+        # Use BoxLayout (vertical) so layout adapts to screen height on all devices.
+        # FloatLayout with pos_hint percentages causes gaps on tall mobile screens
+        # because centre_y=0.55 and y=0.04 are fractions of the full screen height,
+        # not of the space between the elements — they drift apart at 800+dp heights.
+        root = BoxLayout(orientation='vertical')
         with root.canvas.before:
             Color(*BG)
             self._bg_rect = Rectangle(pos=root.pos, size=root.size)
@@ -2384,35 +2390,28 @@ class RecommendScreen(Screen):
         root.add_widget(Label(
             text="[b]Swipe to Decide[/b]", markup=True,
             font_size=dp(18), color=TEXT,
-            pos_hint={'center_x': 0.5, 'top': 0.97},
-            size_hint=(0.9, None), height=dp(36)))
+            size_hint_y=None, height=dp(44)))
 
         root.add_widget(Label(
-            text=f"{E('➡')} Watch    {E('⬅')} Skip    {E('⬇')} Not Interested",
-            markup=True, font_size=dp(10), color=SUBTEXT,
-            pos_hint={'center_x': 0.5, 'top': 0.92},
-            size_hint=(0.9, None), height=dp(20)))
+            text=">> Watch    << Skip    v Not Interested",
+            font_size=dp(10), color=SUBTEXT,
+            size_hint_y=None, height=dp(22)))
 
-        self._card_area = FloatLayout(
-            size_hint=(1, None), height=dp(460),
-            pos_hint={'center_x': 0.5, 'center_y': 0.55})
+        # Card area: flexible height, fills whatever remains after header + buttons
+        self._card_area = FloatLayout(size_hint=(1, 1))
         root.add_widget(self._card_area)
 
-        btn_row = BoxLayout(size_hint=(None, None), size=(dp(280), dp(50)),
-                            pos_hint={'center_x': 0.5, 'y': 0.04},
-                            spacing=dp(12))
-        skip_btn = Button(text=f"{E('❌')} Skip", markup=True,
-                          size_hint_x=None, width=dp(80),
+        btn_row = BoxLayout(size_hint_y=None, height=dp(56),
+                            padding=[dp(20), dp(6)], spacing=dp(12))
+        skip_btn = Button(text="Skip",
                           background_normal="",
                           background_color=(0.35, 0.15, 0.15, 1),
                           color=TEXT, font_size=dp(13))
-        nope_btn = Button(text=f"{E('👎')} Nope", markup=True,
-                          size_hint_x=None, width=dp(80),
+        nope_btn = Button(text="Nope",
                           background_normal="",
                           background_color=(0.25, 0.20, 0.10, 1),
                           color=TEXT, font_size=dp(12))
-        watch_btn = Button(text=f"{E('✅')} Watch", markup=True,
-                           size_hint_x=None, width=dp(100),
+        watch_btn = Button(text="Watch",
                            background_normal="", background_color=GREEN,
                            color=TEXT, font_size=dp(13), bold=True)
         skip_btn.bind(on_press=lambda *_: self._animate('skip'))
@@ -2446,8 +2445,11 @@ class RecommendScreen(Screen):
         self._current_card = card
 
     def _make_card(self, movie):
+        # Card height = poster (dp(360)) + info panel (dp(160)) = dp(520).
+        # Previously dp(400) caused the info section to overflow below the card
+        # and get clipped, hiding avail_text and the download button on device.
         card = BoxLayout(orientation='vertical',
-                         size_hint=(None, None), size=(dp(280), dp(400)),
+                         size_hint=(None, None), size=(dp(280), dp(520)),
                          pos_hint={'center_x': 0.5, 'center_y': 0.5},
                          spacing=0, padding=0)
         with card.canvas.before:
