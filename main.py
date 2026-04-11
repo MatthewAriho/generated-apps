@@ -1962,6 +1962,12 @@ class WatchScreen(Screen):
         self.selected_count = 3
         self.active_sorts = {"Random"}
         self._count_lbl = None
+        # Card pools: keyed by movie title. Built once per movie, reused on every
+        # sort/count change so AsyncImage widgets are never destroyed and recreated.
+        self._watch_pool    = {}   # title → MoviePosterCard (plex movies)
+        self._rec_pool      = {}   # title → MoviePosterCard (plex + lb movies)
+        self._pool_plex_set = set()
+        self._pool_lb_set   = set()
         self._build_ui()
         _refresh_cbs.append(lambda: Clock.schedule_once(
             lambda dt: self._refresh_movies(), 0))
@@ -2145,12 +2151,37 @@ class WatchScreen(Screen):
         return result[:self.selected_count]
 
     def _refresh_movies(self):
+        # ── Rebuild card pool only when the underlying movie lists change ──────
+        # This is the key optimisation: AsyncImage widgets are created once and
+        # reused. Removing a card from clear_widgets() and re-adding it does NOT
+        # re-trigger image loading — the texture is already loaded on the widget.
+        plex_set = {m['title'] for m in _plex_movies}
+        lb_set   = {m['title'] for m in _lb_movies}
+
+        if plex_set != self._pool_plex_set or lb_set != self._pool_lb_set:
+            # Add cards for new movies
+            for m in _plex_movies:
+                if m['title'] not in self._watch_pool:
+                    self._watch_pool[m['title']] = MoviePosterCard(
+                        m, on_tap=self._show_detail)
+            for m in _plex_movies + _lb_movies:
+                if m['title'] not in self._rec_pool:
+                    is_plex = m.get('source') == 'plex' or m.get('on_plex', False)
+                    self._rec_pool[m['title']] = MoviePosterCard(
+                        m, on_tap=self._show_detail, show_lb_badge=not is_plex)
+            # Prune cards for movies no longer in the lists
+            for gone in self._pool_plex_set - plex_set:
+                self._watch_pool.pop(gone, None)
+            for gone in (self._pool_plex_set | self._pool_lb_set) - (plex_set | lb_set):
+                self._rec_pool.pop(gone, None)
+            self._pool_plex_set = plex_set
+            self._pool_lb_set   = lb_set
+
+        # ── Repopulate containers from pool (no new widgets created) ──────────
         self._watch_container.clear_widgets()
         self._rec_container.clear_widgets()
 
         watch = self._sort_movies(_plex_movies)
-        rec   = self._sort_movies(_plex_movies + _lb_movies)
-
         if not watch:
             empty = Label(text="Nothing to show here",
                           font_size=dp(13), color=SUBTEXT,
@@ -2159,11 +2190,13 @@ class WatchScreen(Screen):
             self._watch_container.add_widget(empty)
         else:
             for m in watch:
-                self._watch_container.add_widget(
-                    MoviePosterCard(m, on_tap=self._show_detail))
+                card = self._watch_pool.get(m['title'])
+                if card:
+                    self._watch_container.add_widget(card)
         self._watch_container.width = max(
             dp(130) * max(len(watch), 1) + dp(8) * max(len(watch)-1, 0), Window.width)
 
+        rec = self._sort_movies(_plex_movies + _lb_movies)
         if not rec:
             empty = Label(text="Nothing to show here",
                           font_size=dp(13), color=SUBTEXT,
@@ -2172,10 +2205,9 @@ class WatchScreen(Screen):
             self._rec_container.add_widget(empty)
         else:
             for m in rec:
-                is_plex = m.get('source') == 'plex'
-                card = MoviePosterCard(m, on_tap=self._show_detail,
-                                       show_lb_badge=not is_plex)
-                self._rec_container.add_widget(card)
+                card = self._rec_pool.get(m['title'])
+                if card:
+                    self._rec_container.add_widget(card)
         self._rec_container.width = max(
             dp(130) * max(len(rec), 1) + dp(8) * max(len(rec)-1, 0), Window.width)
 
