@@ -1756,7 +1756,7 @@ class PosterWidget(FloatLayout):
         else:
             cc     = movie.get('country', '?')
             rating = movie.get('rating', 0)
-            text   = f"{cc}\n★ {rating:.1f}" if rating else cc
+            text   = f"{cc}\n{rating:.1f}/10" if rating else cc
             self.add_widget(Label(
                 text=text, markup=True, font_size=dp(18),
                 bold=True, color=TEXT,
@@ -2393,7 +2393,7 @@ class RecommendScreen(Screen):
             size_hint_y=None, height=dp(44)))
 
         root.add_widget(Label(
-            text=">> Watch    << Skip    v Not Interested",
+            text="→ Watch      ← Skip      ↓ Not Interested",
             font_size=dp(10), color=SUBTEXT,
             size_hint_y=None, height=dp(22)))
 
