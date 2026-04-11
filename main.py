@@ -1306,9 +1306,63 @@ def fetch_tmdb_posters_async(movies, api_key, on_done):
     """Back-compat: delegates to full enrichment."""
     fetch_tmdb_enrich_async(movies, api_key, on_done)
 
+# ── Poster Image Cache ────────────────────────────────────────────────────────
+class PosterCache:
+    """Downloads poster images to local storage so AsyncImage uses a local path.
+    Filenames are derived from the URL so re-downloading is never needed."""
+
+    @staticmethod
+    def _dir():
+        try:
+            base = App.get_running_app().user_data_dir
+        except Exception:
+            base = os.path.dirname(os.path.abspath(__file__))
+        d = os.path.join(base, 'cinequeue_posters')
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    @staticmethod
+    def local_path(url):
+        """Return the local file path for a remote URL (may not exist yet)."""
+        name = re.sub(r'[^a-zA-Z0-9._-]', '_', url.split('/')[-1]) or 'poster.jpg'
+        # Prefix with a short hash of the full URL to avoid filename collisions
+        prefix = format(hash(url) & 0xFFFFFF, 'x')
+        return os.path.join(PosterCache._dir(), f"{prefix}_{name}")
+
+    @staticmethod
+    def download(url, ctx=None):
+        """Download url to local cache. Returns local path, or None on failure."""
+        path = PosterCache.local_path(url)
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            return path  # already cached
+        try:
+            if ctx is None:
+                ctx = ssl._create_unverified_context()
+            req = urllib.request.Request(url, headers={'User-Agent': 'CineQueue/1.0'})
+            with urllib.request.urlopen(req, timeout=15, context=ctx) as r:
+                data = r.read()
+            with open(path, 'wb') as f:
+                f.write(data)
+            return path
+        except Exception:
+            return None
+
+    @staticmethod
+    def ensure(movie, ctx=None):
+        """Download poster for movie if not already cached. Sets local_poster key."""
+        url = movie.get('poster_url')
+        if not url:
+            return
+        if movie.get('local_poster') and os.path.exists(movie['local_poster']):
+            return  # already have a valid local copy
+        local = PosterCache.download(url, ctx)
+        if local:
+            movie['local_poster'] = local
+
+
 def fetch_tmdb_enrich_async(movies, api_key, on_done):
     """Enrich movies using TMDB: fills poster, runtime, genre, director, country, year.
-       After enrichment, filters bad data from the global lists."""
+    Downloads poster images to local storage. After enrichment, filters bad data."""
     def run():
         search  = "https://api.themoviedb.org/3/search/movie"
         detail  = "https://api.themoviedb.org/3/movie"
@@ -1324,6 +1378,8 @@ def fetch_tmdb_enrich_async(movies, api_key, on_done):
                 not m.get('year')
             )
             if not needs:
+                # Metadata complete — still ensure poster is downloaded locally
+                PosterCache.ensure(m, _ctx)
                 continue
 
             try:
@@ -1335,7 +1391,6 @@ def fetch_tmdb_enrich_async(movies, api_key, on_done):
                     results = json.loads(r.read()).get('results', [])
 
                 if not results:
-                    #print(f"[TMDB] No results for {m['title']!r}")
                     continue
 
                 top = results[0]
@@ -1374,19 +1429,16 @@ def fetch_tmdb_enrich_async(movies, api_key, on_done):
                             raw = pcs[0].get('name', '')
                             m['country'] = _TMDB_COUNTRY.get(raw, raw[:2].upper() if raw else '?')
 
-                #print(f"[TMDB] Enriched {m['title']!r}: rt={m.get('runtime')} genre={m.get('genre')}")
+                # Download poster locally now that we have the URL
+                PosterCache.ensure(m, _ctx)
 
-            except Exception as e:
-                #print(f"[TMDB] Error for {m['title']!r}: {e}")
+            except Exception:
                 pass
 
         # Filter bad data out of global lists
         global _plex_movies, _lb_movies
-        before_px = len(_plex_movies)
-        before_lb = len(_lb_movies)
         _plex_movies = [m for m in _plex_movies if not _is_bad_movie(m)]
         _lb_movies   = [m for m in _lb_movies   if not _is_bad_movie(m)]
-        #print(f"[TMDB] Filtered: plex {before_px}→{len(_plex_movies)}, lb {before_lb}→{len(_lb_movies)}")
 
         Clock.schedule_once(lambda dt: on_done(), 0)
 
@@ -1685,16 +1737,20 @@ class PosterWidget(FloatLayout):
             self._bg = Rectangle(pos=self.pos, size=self.size)
         self.bind(pos=self._upd, size=self._upd)
 
-        url = movie.get('poster_url')
+        local = movie.get('local_poster')
+        url = (local if local and os.path.exists(local) else None) or movie.get('poster_url')
         if url:
-            self.add_widget(AsyncImage(
+            img = AsyncImage(
                 source=url,
                 allow_stretch=True,
                 keep_ratio=True,
                 fit_mode='fill',
                 size_hint=(1, 1),
                 pos_hint={'x': 0, 'y': 0}
-            ))
+            )
+            if local and os.path.exists(local) and movie.get('poster_url'):
+                img.bind(on_error=lambda *a: setattr(img, 'source', movie['poster_url']))
+            self.add_widget(img)
         else:
             cc     = movie.get('country', '?')
             rating = movie.get('rating', 0)
@@ -2225,7 +2281,7 @@ class WatchScreen(Screen):
             Color(*BG)
             Rectangle(pos=content.pos, size=content.size)
 
-        poster = PosterWidget(movie, h=dp(480))
+        poster = PosterWidget(movie, h=dp(360))
         content.add_widget(poster)
 
         for line in [
@@ -2401,7 +2457,7 @@ class RecommendScreen(Screen):
         card.bind(pos=self._upd_card_bg, size=self._upd_card_bg)
         card._movie = movie
 
-        poster = PosterWidget(movie, h=dp(480))
+        poster = PosterWidget(movie, h=dp(360))
         card.add_widget(poster)
         # no extra label on top — PosterWidget handles country/rating fallback
 
