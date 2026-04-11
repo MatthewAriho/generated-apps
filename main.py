@@ -2225,7 +2225,7 @@ class WatchScreen(Screen):
             Color(*BG)
             Rectangle(pos=content.pos, size=content.size)
 
-        poster = PosterWidget(movie, h=dp(160))
+        poster = PosterWidget(movie, h=dp(480))
         content.add_widget(poster)
 
         for line in [
@@ -2401,7 +2401,7 @@ class RecommendScreen(Screen):
         card.bind(pos=self._upd_card_bg, size=self._upd_card_bg)
         card._movie = movie
 
-        poster = PosterWidget(movie, h=dp(240))
+        poster = PosterWidget(movie, h=dp(480))
         card.add_widget(poster)
         # no extra label on top — PosterWidget handles country/rating fallback
 
@@ -3296,15 +3296,15 @@ class _BackgroundSyncer:
             return
         _find_intersection(_plex_movies, _lb_movies)
         new_movies = self._new_plex + self._new_lb
+        self._changed = bool(new_movies)
         if self._tmdb_key and new_movies:
-            #print(f"[BgSync] TMDB-enriching {len(new_movies)} new movies")
             fetch_tmdb_enrich_async(new_movies, self._tmdb_key, self._finish)
         else:
             self._finish()
 
     def _finish(self):
         MovieCache.save(_plex_movies, _lb_movies, _lb_stats)
-        Clock.schedule_once(lambda dt: self._on_done(), 0)
+        Clock.schedule_once(lambda dt: self._on_done(self._changed), 0)
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -3344,31 +3344,29 @@ class CineQueueApp(App):
         root.add_widget(self._nav)
 
         if has_creds:
-            # Try loading from cache first
+            # Always route through LoadingScreen as a buffer.
+            # Load device cache immediately into globals so data is ready the moment
+            # the app transitions to watch. LoadingScreen then does an incremental
+            # sync — only fetches from Plex/LB/TMDB for movies not already in cache.
             cached_plex, cached_lb, cached_stats = MovieCache.load()
             if cached_plex or cached_lb:
-                # Populate globals from cache and show app immediately
                 global _plex_movies, _lb_movies, _lb_stats
                 _plex_movies = cached_plex
                 _lb_movies   = cached_lb
                 _lb_stats    = cached_stats
                 _find_intersection(_plex_movies, _lb_movies)
-                self._sm.current = 'watch'
-                self._nav.height = dp(56)
-                # Background sync shortly after launch, then every 2 minutes
-                Clock.schedule_once(lambda dt: self._background_sync(), 2.0)
-                Clock.schedule_once(lambda dt: self._start_refresh_timer(), 3.0)
-            else:
-                # First launch — show loading screen
-                loading = LoadingScreen(name='loading', on_ready=self._on_load_done)
-                self._sm.add_widget(loading)
-                self._sm.current = 'loading'
-                plex_url   = Settings.get('plex_url')
-                plex_token = Settings.get('plex_token')
-                lb_user    = Settings.get('lb_username')
-                tmdb_key   = Settings.get('tmdb_key')
-                Clock.schedule_once(
-                    lambda dt: loading.start(plex_url, plex_token, lb_user, tmdb_key), 0.3)
+
+            loading = LoadingScreen(name='loading', on_ready=self._on_load_done)
+            self._sm.add_widget(loading)
+            self._sm.current = 'loading'
+            plex_url   = Settings.get('plex_url')
+            plex_token = Settings.get('plex_token')
+            lb_user    = Settings.get('lb_username')
+            tmdb_key   = Settings.get('tmdb_key')
+            Clock.schedule_once(
+                lambda dt: loading.start(
+                    plex_url, plex_token, lb_user, tmdb_key,
+                    cached_plex=cached_plex, cached_lb=cached_lb), 0.3)
         else:
             welcome = WelcomeScreen(name='welcome', on_connect=self._on_welcome_done)
             self._sm.add_widget(welcome)
@@ -3377,10 +3375,9 @@ class CineQueueApp(App):
         return root
 
     def _on_load_done(self):
-        #print("[App] Loading done — switching to watch screen")
         self._sm.current = 'watch'
         self._nav.height = dp(56)
-        # Start periodic refresh
+        # Periodic background sync — only triggers _notify_refresh if new movies found
         self._start_refresh_timer()
 
     def _start_refresh_timer(self):
@@ -3406,9 +3403,9 @@ class CineQueueApp(App):
             on_done=self._on_bg_sync_done)
         syncer.run()
 
-    def _on_bg_sync_done(self):
-        #print("[App] Background sync done")
-        _notify_refresh()
+    def _on_bg_sync_done(self, changed=False):
+        if changed:
+            _notify_refresh()
         if not self._refresh_timer:
             self._start_refresh_timer()
 
