@@ -1,0 +1,19 @@
+[project]
+name = "dating-assistant"
+version = "1.5"
+description = "AI-powered dating assistant — icebreakers, chat, tracking, motivation"
+
+[tool.flet]
+org = "org.datingassistant"
+product = "Dating Assistant"
+description = "AI-powered dating assistant"
+version = "1.5"
+
+[tool.flet.android]
+min_sdk = 26
+target_sdk = 34
+permissions = [
+    "android.permission.INTERNET",
+    "android.permission.READ_EXTERNAL_STORAGE",
+    "android.permission.WRITE_EXTERNAL_STORAGE",
+]

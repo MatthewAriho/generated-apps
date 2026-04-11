@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.buildozer/
+bin/
+build/
+*.apk
+*.ttf
+new_prompt.md
+app_2026*/
+calculator/
