@@ -726,15 +726,16 @@ def syno_action_async(action_fn, on_done, on_error):
 
 # ── Prowlarr Client ───────────────────────────────────────────────────────────
 class ProwlarrClient:
-    """REST client for Prowlarr API v1.
-    Prowlarr acts as a unified indexer proxy — it aggregates torrent/NZB indexers
-    and exposes a single search API. We use it to find releases for movies.
+    """Reserved for future direct indexer access via Prowlarr API v1.
+    Prowlarr aggregates torrent/NZB indexers into a single search proxy.
 
-    Future ideas:
-    - Store preferred quality profile (1080p BluRay > WEB-DL > 720p)
-    - Respect per-indexer rate limits
-    - Cache search results so re-queuing doesn't re-search
-    - Support NZB (Usenet) alongside torrents
+    Currently NOT used in the download pipeline — Radarr (which connects to
+    Prowlarr internally) handles movie searching. ProwlarrClient is kept here
+    for future use cases:
+    - Manual release browsing / release picker UI
+    - Fallback search if Radarr is unavailable
+    - Multi-indexer health checks
+    - NZB/Usenet support independent of Radarr
     """
     CATEGORIES_MOVIE = [2000, 2010, 2020, 2030, 2040, 2045, 2050, 2060]
 
@@ -743,7 +744,7 @@ class ProwlarrClient:
         self._key  = api_key
 
     def _get(self, path, params=None, timeout=15):
-        qs = urllib.parse.urlencode(params or {})
+        qs  = urllib.parse.urlencode(params or {})
         url = f"{self._base}{path}?{qs}" if qs else f"{self._base}{path}"
         req = urllib.request.Request(url, headers={'X-Api-Key': self._key})
         ctx = ssl.create_default_context()
@@ -753,52 +754,101 @@ class ProwlarrClient:
             return json.loads(r.read().decode())
 
     def search(self, title, year=None):
-        """Search all indexers for a movie. Returns list of release dicts."""
         query = f"{title} {year}" if year else title
         cats  = ','.join(str(c) for c in self.CATEGORIES_MOVIE)
-        try:
-            results = self._get('/api/v1/search', {
-                'query': query, 'type': 'search',
-                'indexerIds': '-1', 'categories': cats,
-            })
-            return results if isinstance(results, list) else []
-        except Exception as e:
-            raise RuntimeError(f"Prowlarr search failed: {e}")
+        results = self._get('/api/v1/search', {
+            'query': query, 'type': 'search',
+            'indexerIds': '-1', 'categories': cats,
+        })
+        return results if isinstance(results, list) else []
 
-    def best_release(self, results):
-        """Pick best release: prefer 1080p, then most seeders.
-        Future: configurable quality profiles, size caps, trusted indexers."""
-        if not results:
-            return None
-        def score(r):
-            title = (r.get('title') or '').lower()
-            q = 3 if '1080p' in title else (2 if '720p' in title else 1)
-            if '4k' in title or '2160p' in title:
-                q = 4
-            seeders = r.get('seeders') or 0
-            return (q * 1000) + seeders
-        ranked = sorted(results, key=score, reverse=True)
-        # Filter out releases with no download URL
-        for r in ranked:
-            if r.get('downloadUrl') or r.get('magnetUrl') or r.get('infoUrl'):
-                return r
-        return ranked[0] if ranked else None
+    def indexers(self):
+        return self._get('/api/v1/indexer')
 
-    def grab(self, release):
-        """Tell Prowlarr to send this release to the configured download client.
-        Prowlarr will forward to qBittorrent/SABnzbd as configured in its settings."""
-        guid       = release.get('guid', '')
-        indexer_id = release.get('indexerId', 0)
-        data       = json.dumps({'guid': guid, 'indexerId': indexer_id}).encode()
-        url        = f"{self._base}/api/v1/search"
-        req = urllib.request.Request(url, data=data, method='POST',
-                                     headers={'X-Api-Key': self._key,
-                                              'Content-Type': 'application/json'})
+
+# ── Radarr Client ─────────────────────────────────────────────────────────────
+class RadarrClient:
+    """REST client for Radarr API v3.
+    Radarr is the correct service for managing and searching movies:
+    - It connects to Prowlarr for indexer search under the hood
+    - It manages quality profiles, root folders, and the movie library
+    - It sends grabs directly to qBittorrent/SABnzbd as configured
+
+    Flow: lookup(title) → get quality profile + root folder → add_movie() →
+          Radarr auto-searches indexers → sends to download client → we poll queue()
+
+    Future ideas:
+    - Expose quality profile selection to the user (currently uses first available)
+    - Show Radarr's grab history per movie (radarr_movie_id stored in entry)
+    - Support manual search trigger: POST /api/v3/command {name: MovieSearch}
+    - Sync Radarr library back to CineQueue's "on Plex" status after download
+    - Handle "already in Radarr" gracefully (update monitored flag instead of re-adding)
+    - Use Radarr tags to mark movies added via CineQueue
+    """
+
+    def __init__(self, base_url, api_key):
+        self._base = base_url.rstrip('/')
+        self._key  = api_key
+
+    def _ctx(self):
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
+        return ctx
+
+    def _req(self, method, path, params=None, body=None, timeout=15):
+        qs  = urllib.parse.urlencode(params or {})
+        url = f"{self._base}{path}?{qs}" if qs else f"{self._base}{path}"
+        data = json.dumps(body).encode() if body is not None else None
+        headers = {'X-Api-Key': self._key, 'Content-Type': 'application/json'}
+        req = urllib.request.Request(url, data=data, method=method,
+                                     headers=headers)
+        with urllib.request.urlopen(req, context=self._ctx(), timeout=timeout) as r:
             return json.loads(r.read().decode())
+
+    def lookup(self, title, year=None):
+        """Search Radarr's movie lookup (TMDB-backed). Returns list of candidates."""
+        term = f"{title} {year}" if year else title
+        results = self._req('GET', '/api/v3/movie/lookup', {'term': term})
+        return results if isinstance(results, list) else []
+
+    def quality_profiles(self):
+        return self._req('GET', '/api/v3/qualityProfile')
+
+    def root_folders(self):
+        return self._req('GET', '/api/v3/rootFolder')
+
+    def add_movie(self, tmdb_id, title, year, quality_profile_id, root_folder_path,
+                  search_on_add=True):
+        """Add a movie to Radarr and optionally trigger an immediate search."""
+        body = {
+            'tmdbId':           tmdb_id,
+            'title':            title,
+            'year':             year,
+            'qualityProfileId': quality_profile_id,
+            'rootFolderPath':   root_folder_path,
+            'monitored':        True,
+            'addOptions':       {'searchForMovie': search_on_add},
+        }
+        return self._req('POST', '/api/v3/movie', body=body)
+
+    def get_movie(self, radarr_id):
+        """Get movie record by Radarr internal ID."""
+        return self._req('GET', f'/api/v3/movie/{radarr_id}')
+
+    def queue(self, radarr_id=None):
+        """Return Radarr's download queue. Optionally filter by movie ID."""
+        params = {}
+        if radarr_id:
+            params['movieId'] = radarr_id
+        result = self._req('GET', '/api/v3/queue', params)
+        records = result.get('records', result) if isinstance(result, dict) else result
+        return records if isinstance(records, list) else []
+
+    def command(self, name, **kwargs):
+        """Trigger a Radarr command (e.g. MovieSearch, RescanMovie)."""
+        body = {'name': name, **kwargs}
+        return self._req('POST', '/api/v3/command', body=body)
 
 
 # ── qBittorrent Client ────────────────────────────────────────────────────────
@@ -954,6 +1004,7 @@ class DownloadQueue:
             'qbit_status':  '',
             'eta_secs':     -1,
             'size_bytes':   0,
+            'radarr_id':    None,
             'error':        '',
         }
         _download_queue.append(entry)
@@ -978,112 +1029,180 @@ class DownloadQueue:
 
     @staticmethod
     def search_and_grab(entry_id, on_update):
-        """Background: Prowlarr search → auto-pick best → grab.
+        """Background: Radarr lookup → add movie → Radarr searches via Prowlarr → qBit.
+        Radarr is the correct service for movie management; it uses Prowlarr internally
+        for indexer access and sends releases directly to the configured download client.
         on_update(entry) called on main thread after each state change."""
-        prowlarr_url = Settings.get('prowlarr_url', '')
-        prowlarr_key = Settings.get('prowlarr_api_key', '')
+        radarr_url = Settings.get('radarr_url', '')
+        radarr_key = Settings.get('radarr_api_key', '')
 
         def run():
             entry = next((e for e in _download_queue if e['id'] == entry_id), None)
             if not entry:
                 return
 
-            if not prowlarr_url or not prowlarr_key:
+            if not radarr_url or not radarr_key:
                 DownloadQueue.update(entry_id, status='failed',
-                                     error='Prowlarr URL/API key not set in Settings')
+                                     error='Radarr URL/API key not set in Settings')
                 Clock.schedule_once(lambda dt: on_update(entry), 0)
                 return
 
-            # 1. Search
+            client = RadarrClient(radarr_url, radarr_key)
+
+            # 1. Lookup movie in Radarr (TMDB-backed)
             DownloadQueue.update(entry_id, status='searching', error='')
             Clock.schedule_once(lambda dt: on_update(entry), 0)
             try:
-                client  = ProwlarrClient(prowlarr_url, prowlarr_key)
-                results = client.search(entry['title'], entry.get('year'))
-                if not results:
+                candidates = client.lookup(entry['title'], entry.get('year'))
+                if not candidates:
                     DownloadQueue.update(entry_id, status='no_results',
-                                         error='No releases found on any indexer')
+                                         error='Movie not found in Radarr/TMDB lookup')
                     Clock.schedule_once(lambda dt: on_update(entry), 0)
                     return
-                best = client.best_release(results)
+                # Pick closest title+year match
+                year = entry.get('year')
+                best_candidate = next(
+                    (c for c in candidates
+                     if str(c.get('year','')) == str(year)
+                     and c.get('title','').lower() == entry['title'].lower()),
+                    candidates[0])
+                tmdb_id = best_candidate.get('tmdbId') or best_candidate.get('id')
                 DownloadQueue.update(entry_id, status='results_found',
-                                      results=results[:20],  # cap stored results
-                                      chosen=best)
+                                      chosen={'title': best_candidate.get('title'),
+                                              'year':  best_candidate.get('year'),
+                                              'tmdbId': tmdb_id})
                 Clock.schedule_once(lambda dt: on_update(entry), 0)
             except Exception as e:
                 DownloadQueue.update(entry_id, status='failed', error=str(e))
                 Clock.schedule_once(lambda dt: on_update(entry), 0)
                 return
 
-            # 2. Grab via Prowlarr → sends to configured download client
-            if not best:
-                DownloadQueue.update(entry_id, status='no_results',
-                                      error='No grabbable release found')
+            # 2. Get quality profile + root folder (use first available)
+            try:
+                profiles     = client.quality_profiles()
+                root_folders = client.root_folders()
+                if not profiles or not root_folders:
+                    raise RuntimeError('No quality profiles or root folders in Radarr')
+                profile_id   = profiles[0]['id']
+                root_path    = root_folders[0]['path']
+            except Exception as e:
+                DownloadQueue.update(entry_id, status='failed',
+                                      error=f"Radarr config error: {e}")
                 Clock.schedule_once(lambda dt: on_update(entry), 0)
                 return
+
+            # 3. Add movie to Radarr + trigger automatic search via Prowlarr indexers
             try:
                 DownloadQueue.update(entry_id, status='grabbing')
                 Clock.schedule_once(lambda dt: on_update(entry), 0)
-                client.grab(best)
-                # After grab, qBit hash not immediately known — mark as downloading
-                # A future poll of qBit will match by title and update the hash
+                result = client.add_movie(
+                    tmdb_id=tmdb_id,
+                    title=entry['title'],
+                    year=int(entry.get('year') or 0),
+                    quality_profile_id=profile_id,
+                    root_folder_path=root_path,
+                    search_on_add=True)
+                radarr_id = result.get('id')
                 DownloadQueue.update(entry_id, status='downloading',
-                                      qbit_hash=None)
+                                      radarr_id=radarr_id, qbit_hash=None)
                 Clock.schedule_once(lambda dt: on_update(entry), 0)
             except Exception as e:
-                DownloadQueue.update(entry_id, status='failed', error=str(e))
+                err = str(e)
+                # Radarr returns 400 if movie already exists — treat as success
+                if '400' in err or 'already' in err.lower():
+                    DownloadQueue.update(entry_id, status='downloading',
+                                          error='Already in Radarr — monitoring active')
+                else:
+                    DownloadQueue.update(entry_id, status='failed', error=err)
                 Clock.schedule_once(lambda dt: on_update(entry), 0)
 
         threading.Thread(target=run, daemon=True).start()
 
     @staticmethod
-    def poll_qbit(on_update):
-        """Poll qBittorrent for progress on all downloading entries.
-        Matches by torrent hash if known, else attempts title match.
-        Future: cache the SID session to avoid re-login every poll."""
-        qbit_url  = Settings.get('qbit_url', '')
-        qbit_user = Settings.get('qbit_username', 'admin')
-        qbit_pass = Settings.get('qbit_password', 'adminadmin')
-        active    = [e for e in _download_queue
-                     if e['status'] in ('downloading', 'grabbing')]
-        if not active or not qbit_url:
+    def poll_progress(on_update):
+        """Poll Radarr queue + qBittorrent for download progress on active entries.
+        Radarr queue provides the authoritative status (it knows the Radarr state);
+        qBittorrent gives byte-level progress and ETA.
+        Future: cache qBit SID session to avoid re-login every poll."""
+        radarr_url = Settings.get('radarr_url', '')
+        radarr_key = Settings.get('radarr_api_key', '')
+        qbit_url   = Settings.get('qbit_url', '')
+        qbit_user  = Settings.get('qbit_username', 'admin')
+        qbit_pass  = Settings.get('qbit_password', 'adminadmin')
+        active     = [e for e in _download_queue
+                      if e['status'] in ('downloading', 'grabbing')]
+        if not active:
             return
 
         def run():
-            try:
-                qb = QBitClient(qbit_url, qbit_user, qbit_pass)
-                if not qb.login():
-                    return
-                torrents = qb.get_torrents()
-                for entry in active:
-                    matched = None
-                    if entry.get('qbit_hash'):
-                        matched = next((t for t in torrents
-                                        if t['hash'] == entry['qbit_hash']), None)
-                    if not matched:
-                        # Try title fuzzy match
-                        slug = entry['title'].lower().replace(' ', '.')
-                        matched = next((t for t in torrents
-                                        if slug[:10] in t.get('name','').lower()), None)
-                    if matched:
-                        prog   = matched.get('progress', 0.0)
-                        state  = matched.get('state', '')
-                        eta    = matched.get('eta', -1)
-                        size   = matched.get('size', 0)
-                        status = 'complete' if prog >= 1.0 else 'downloading'
-                        DownloadQueue.update(
-                            entry['id'],
-                            qbit_hash=matched['hash'],
-                            progress=prog,
-                            qbit_status=state,
-                            eta_secs=eta,
-                            size_bytes=size,
-                            status=status)
-                        Clock.schedule_once(lambda dt: on_update(), 0)
-            except Exception:
-                pass
+            # 1. Poll Radarr queue for status of each entry that has a radarr_id
+            radarr_queue = []
+            if radarr_url and radarr_key:
+                try:
+                    radarr_queue = RadarrClient(radarr_url, radarr_key).queue()
+                except Exception:
+                    pass
+
+            # 2. Poll qBittorrent for byte-level progress
+            torrents = []
+            if qbit_url:
+                try:
+                    qb = QBitClient(qbit_url, qbit_user, qbit_pass)
+                    if qb.login():
+                        torrents = qb.get_torrents()
+                except Exception:
+                    pass
+
+            for entry in active:
+                updates = {}
+
+                # Match in Radarr queue by radarr_id or title
+                rq_match = None
+                if entry.get('radarr_id'):
+                    rq_match = next((r for r in radarr_queue
+                                     if r.get('movieId') == entry['radarr_id']), None)
+                if not rq_match:
+                    rq_match = next((r for r in radarr_queue
+                                     if r.get('title','').lower() ==
+                                        entry['title'].lower()), None)
+                if rq_match:
+                    size_left = rq_match.get('sizeleft', 0)
+                    size_tot  = rq_match.get('size', 0)
+                    prog      = (1.0 - size_left / size_tot) if size_tot else 0.0
+                    state     = rq_match.get('status', '')
+                    updates.update(progress=prog, qbit_status=state,
+                                   size_bytes=int(size_tot))
+
+                # Match in qBit by hash or title slug for finer ETA
+                qb_match = None
+                if entry.get('qbit_hash'):
+                    qb_match = next((t for t in torrents
+                                     if t['hash'] == entry['qbit_hash']), None)
+                if not qb_match:
+                    slug = entry['title'].lower().replace(' ', '.')
+                    qb_match = next((t for t in torrents
+                                     if slug[:12] in t.get('name','').lower()), None)
+                if qb_match:
+                    prog  = qb_match.get('progress', updates.get('progress', 0.0))
+                    state = qb_match.get('state', updates.get('qbit_status', ''))
+                    updates.update(
+                        qbit_hash=qb_match['hash'],
+                        progress=prog,
+                        qbit_status=state,
+                        eta_secs=qb_match.get('eta', -1),
+                        size_bytes=qb_match.get('size', updates.get('size_bytes', 0)))
+
+                if updates:
+                    prog   = updates.get('progress', entry.get('progress', 0.0))
+                    status = 'complete' if prog >= 1.0 else 'downloading'
+                    updates['status'] = status
+                    DownloadQueue.update(entry['id'], **updates)
+                    Clock.schedule_once(lambda dt: on_update(), 0)
 
         threading.Thread(target=run, daemon=True).start()
+
+    # Keep old name as alias for callers
+    poll_qbit = poll_progress
 
 
 # ── Async Fetch Helpers ───────────────────────────────────────────────────────
@@ -1535,7 +1654,7 @@ class DownloadsScreen(Screen):
         self._rebuild_list()
 
     def _poll(self):
-        DownloadQueue.poll_qbit(self._rebuild_list)
+        DownloadQueue.poll_progress(self._rebuild_list)
         self._rebuild_list()
 
 
@@ -2670,9 +2789,13 @@ class SettingsScreen(Screen):
                 ("qbit_project",  "VPN+qBit Project",   "qbittorent-gluetun",  False),
                 ("arr_project",   "Arr Stack Project",  "arr-apps",            False),
             ]),
-            ("PROWLARR (Download Search)", [
-                ("prowlarr_url",     "Prowlarr URL",    "http://192.168.1.100:9696", False),
-                ("prowlarr_api_key", "API Key",         "your-prowlarr-api-key",     True),
+            ("RADARR (Movie Downloads)", [
+                ("radarr_url",     "Radarr URL",  "http://192.168.1.100:7878", False),
+                ("radarr_api_key", "API Key",     "your-radarr-api-key",       True),
+            ]),
+            ("PROWLARR (Indexer Proxy — future use)", [
+                ("prowlarr_url",     "Prowlarr URL",  "http://192.168.1.100:9696", False),
+                ("prowlarr_api_key", "API Key",       "your-prowlarr-api-key",     True),
             ]),
             ("QBITTORRENT (Download Client)", [
                 ("qbit_url",      "Web UI URL",   "http://192.168.1.100:8080", False),
