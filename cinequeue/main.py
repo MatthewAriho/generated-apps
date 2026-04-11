@@ -3,31 +3,40 @@ CineQueue — Movie Picker App
 Plex + Letterboxd integration with real API connections
 """
 
-import random, json, os, re, ssl, threading, socket, webbrowser
+import random, json, os, re, ssl, threading, socket, webbrowser, time
 import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
-from kivy.app import App
+from kivymd.app import MDApp
+from kivymd.uix.screen import MDScreen
+from kivymd.uix.button import MDRaisedButton, MDFlatButton, MDIconButton
+from kivymd.uix.textfield import MDTextField
+from kivymd.uix.label import MDLabel
+from kivymd.uix.card import MDCard
+from kivymd.uix.toolbar import MDTopAppBar
+from kivymd.uix.bottomnavigation import MDBottomNavigation, MDBottomNavigationItem
+from kivymd.uix.dialog import MDDialog
+from kivymd.uix.progressbar import MDProgressBar
+from kivymd.uix.snackbar import Snackbar
+
 from kivy.lang import Builder
-from kivy.uix.screenmanager import ScreenManager, Screen, SlideTransition
+from kivy.uix.screenmanager import ScreenManager, SlideTransition
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.label import Label
-from kivy.uix.button import Button
 from kivy.uix.image import AsyncImage
-from kivy.uix.popup import Popup
-from kivy.uix.togglebutton import ToggleButton
+from kivy.uix.button import Button
 from kivy.uix.widget import Widget
 from kivy.graphics import Color, Rectangle, RoundedRectangle
+from kivy.properties import BooleanProperty
 from kivy.metrics import dp
 from kivy.clock import Clock
 from kivy.animation import Animation
 from kivy.core.window import Window
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.relativelayout import RelativeLayout
-from kivy.uix.textinput import TextInput
 from kivy.core.text import LabelBase
 from kivy.resources import resource_find
 
@@ -140,7 +149,7 @@ class Settings:
     def _file(cls):
         if cls._path is None:
             try:
-                base = App.get_running_app().user_data_dir
+                base = MDApp.get_running_app().user_data_dir
             except Exception:
                 base = os.path.expanduser('~')
             cls._path = os.path.join(base, 'cinequeue.json')
@@ -186,7 +195,7 @@ class MovieCache:
     def _file(cls):
         if cls._path is None:
             try:
-                base = App.get_running_app().user_data_dir
+                base = MDApp.get_running_app().user_data_dir
             except Exception:
                 base = os.path.expanduser('~')
             cls._path = os.path.join(base, 'cinequeue_movies.json')
@@ -618,15 +627,20 @@ class SynologyClient:
             for attempt in range(2):
                 try:
                     r = self._req({'api': api, 'method': 'list', 'version': '1'}, timeout=20)
+                    print(f"Data from project query - {r}")
                     if r.get('success'):
                         data = r.get('data', {})
+                        print(f"Data from project query - {data}")
                         if isinstance(data, dict):
                             projects = list(data.values())
+                            print(f"Projects returned (dict)- {projects}")
                             return projects
                         if isinstance(data, list):
+                            print(f"Projects returned (list) - {projects}")
                             return data
                     break
                 except (socket.timeout, TimeoutError):
+                    print(f"Socket timeout when querying projects - {attempt}")
                     if attempt == 0:
                         continue
                 except Exception as e:
@@ -638,6 +652,7 @@ class SynologyClient:
         for p in self._list_projects():
             pname = (p.get('name') or p.get('project_name') or
                      p.get('compose_project_name') or '')
+            print("Project found: {pnname}")
             if pname == name:
                 return p
         return None
@@ -901,6 +916,24 @@ class QBitClient:
         if hashes:
             params['hashes'] = '|'.join(hashes)
         return self._get('/api/v2/torrents/info', params)
+    
+    def stop_torrent(self, hash_str):
+        """Pause/Stop a torrent by hash so it stops seeding"""
+        data = urllib.parse.urlencode({'hashses': hash_str.lower()}).encode()
+        headers = {'Cookie': f'SID={self._sid}'} if self._sid else {}
+        headers['Content-Type'] = 'application/x-www-form--urlencoded'
+        req = urllib.request.Request(f"{self._base}/api/v2/torrents/stop", 
+                                     data=data, method="POST", headers=headers)
+        try:
+            with urllib.request.urlopen(req, context=self._ctx(), timeout=10) as r:
+                return r.read()
+        except Exception as e:
+            # Older qbit (<5.0) uses /pause not stop
+            req = urllib.request.Request(f"{self._base}/api/v2/torrents/pause", 
+                                     data=data, method="POST", headers=headers)
+            with urllib.request.urlopen(req, context=self._ctx(), timeout=10) as r:
+                return r.read()
+
 
     def torrent_by_hash(self, h):
         """Return info for a single torrent, or None if not found."""
@@ -1005,6 +1038,7 @@ class DownloadQueue:
             'eta_secs':     -1,
             'size_bytes':   0,
             'radarr_id':    None,
+            'grabbing_since': None,
             'error':        '',
         }
         _download_queue.append(entry)
@@ -1048,6 +1082,7 @@ class DownloadQueue:
                 return
 
             client = RadarrClient(radarr_url, radarr_key)
+            print("Created Radarr client and searching for movie")
 
             # 1. Lookup movie in Radarr (TMDB-backed)
             DownloadQueue.update(entry_id, status='searching', error='')
@@ -1076,7 +1111,8 @@ class DownloadQueue:
                 DownloadQueue.update(entry_id, status='failed', error=str(e))
                 Clock.schedule_once(lambda dt: on_update(entry), 0)
                 return
-
+            
+            print("Movie found on radarr, going through quality profiles and root folder")
             # 2. Get quality profile + root folder (use first available)
             try:
                 profiles     = client.quality_profiles()
@@ -1091,7 +1127,9 @@ class DownloadQueue:
                 Clock.schedule_once(lambda dt: on_update(entry), 0)
                 return
 
+            print("Adding in Radarr + automatic search via Prowlarr indexers")
             # 3. Add movie to Radarr + trigger automatic search via Prowlarr indexers
+            radarr_id = None
             try:
                 DownloadQueue.update(entry_id, status='grabbing')
                 Clock.schedule_once(lambda dt: on_update(entry), 0)
@@ -1103,18 +1141,65 @@ class DownloadQueue:
                     root_folder_path=root_path,
                     search_on_add=True)
                 radarr_id = result.get('id')
+                print(f"Result from adding movie - {result}")
                 DownloadQueue.update(entry_id, status='downloading',
                                       radarr_id=radarr_id, qbit_hash=None)
                 Clock.schedule_once(lambda dt: on_update(entry), 0)
             except Exception as e:
                 err = str(e)
-                # Radarr returns 400 if movie already exists — treat as success
+                # Radarr returns 400 if movie already exists — look it up to get its ID
                 if '400' in err or 'already' in err.lower():
+                    try:
+                        existing = client.lookup(entry['title'], entry.get('year', ''))
+                        match = next(
+                            (m for m in existing
+                            if str(m.get('year', '')) == str(entry.get('year', '')) and m.get('title', '').lower() == entry['title'].lower()),
+                                existing[0] if existing else None
+                            )
+                        radarr_id = match.get('id') if match else None
+                    except Exception as e:
+                        print("Exception while looking up existing radarr ids")
+                        radarr_id = None
                     DownloadQueue.update(entry_id, status='downloading',
+                                         radarr_id= radarr_id,
                                           error='Already in Radarr — monitoring active')
                 else:
                     DownloadQueue.update(entry_id, status='failed', error=err)
+                    Clock.schedule(lambda dt: on_update(entry), 0)
+                    return
                 Clock.schedule_once(lambda dt: on_update(entry), 0)
+
+            #4. Confirm if Radarr hhas the movie queued for download in qBit
+            if radarr_id:
+                print("Movie is added to radarr, polling for progress..")
+                try:
+                    movie_rec = client.get_movie(radarr_id)
+                    print(f"Movie data from radarr - {movie_rec}")
+                    queue_recs = client.queue(radarr_id)
+
+                    has_file = movie_rec.get('hasFile', False)
+                    in_queue = len(queue_recs) > 0
+                    if has_file:
+                        DownloadQueue.update(entry_id, status='complete', progress=1.0)
+                    elif in_queue:
+                        q = queue_recs[0]
+                        size_tot = q.get('size', 0)
+                        size_left = q.get('sizeleft', size_tot)
+                        prog = (1.0 - size_left/size_tot) if size_tot else 0.0
+                        DownloadQueue(entry_id, status="downloading", 
+                                                progress=prog,
+                                                qbit_status=q.get('status', '')
+                                    )
+                    else:
+                        # Radarr accepted the movie but hasnt found a release yet
+                        DownloadQueue(entry_id, status="grabbing", error="Searching indexers...", grabbing_since=time.time())
+
+                    Clock.schedule_once(lambda dt: on_update(entry), 0)
+                except Exception as e:
+                    print("Exception while polling download progress")
+                    pass # non-fatal - poll_progress will catch it next cycle
+            else:
+                print("Movie doesnt have a radarr id, failed to  poll")
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -1144,15 +1229,21 @@ class DownloadQueue:
                     pass
 
             # 2. Poll qBittorrent for byte-level progress
+            qb = None
             torrents = []
             if qbit_url:
                 try:
                     qb = QBitClient(qbit_url, qbit_user, qbit_pass)
                     if qb.login():
                         torrents = qb.get_torrents()
+                    else:
+                        qb = None
                 except Exception:
-                    pass
+                    qb = None
 
+            radarr_client = RadarrClient(radarr_url, radarr_key) if (radarr_key and radarr_url) else None
+            # for entry in active:
+            #     print(f"Movie entry -{entry}")
             for entry in active:
                 updates = {}
 
@@ -1175,9 +1266,10 @@ class DownloadQueue:
 
                 # Match in qBit by hash or title slug for finer ETA
                 qb_match = None
-                if entry.get('qbit_hash'):
+                stored_hash = (entry.get('qbit_hash') or '').lower()
+                if stored_hash:
                     qb_match = next((t for t in torrents
-                                     if t['hash'] == entry['qbit_hash']), None)
+                                     if t['hash'].lower() == stored_hash), None)
                 if not qb_match:
                     slug = entry['title'].lower().replace(' ', '.')
                     qb_match = next((t for t in torrents
@@ -1191,13 +1283,51 @@ class DownloadQueue:
                         qbit_status=state,
                         eta_secs=qb_match.get('eta', -1),
                         size_bytes=qb_match.get('size', updates.get('size_bytes', 0)))
+                    
+                # if no qbit or radarr queue match, check movie record for completion
+                if not updates and radarr_client and entry.get('radarr_id'):
+                    try:
+                        movie_rec = radarr_client.get_movie(entry['radarr_id'])
+                        if movie_rec.get('hasFile'):
+                            updates.update(progress=1.0, status='complete', grabbing_since=None)
+                            if qb:
+                                hash_to_stop = entry.get('qbit_hash')
+                                if hash_to_stop:
+                                    try:
+                                        qb.stop_torrent(hash_to_stop)
+                                    except Exception as e:
+                                        print("Failed to stop stale download")
+                                        pass
+                    except Exception:
+                        pass
 
                 if updates:
                     prog   = updates.get('progress', entry.get('progress', 0.0))
-                    status = 'complete' if prog >= 1.0 else 'downloading'
-                    updates['status'] = status
+                    if 'status' not in updates:
+                        updates['status'] = 'complete' if prog >= 1.0 else 'downloading'
+                    # Stamp grabbing_since when still at 0% witg bi qBit activity
+                    if prog == 0.0 and not updates.get('qbit_hash') and not entry.get('grabbing_since'):
+                        updates['grabbing_since'] = time.time()
+                    elif prog > 0.0 and 'grabbing_since' not in updates:
+                        updates['grabbing_since'] = None
+                    
+                    #Stop seeding in qbit when complete
+                    if prog == 1.0 and qb:
+                        hash_to_stop = updates.get('qbit_hash') or entry.get('qbit_hash')
+                        if hash_to_stop:
+                            try:
+                                qb.stop_torrent(hash_to_stop)
+                            except Exception as e:
+                                print("Failed to stop seeding torrent")
+                                pass
                     DownloadQueue.update(entry['id'], **updates)
                     Clock.schedule_once(lambda dt: on_update(), 0)
+                else:
+                    # No match anywhere - still fire on_update so UI reflects current state
+                    Clock.schedule_once(lambda dt: on_update(), 0)
+                    if not entry.get('grabbing_since') and entry.get('progress', 0.0) == 0.0:
+                        # No match in Radarr queue or qbit - start the stuck clock
+                        DownloadQueue.update(entry['id'], grabbing_since=time.time())
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -1268,24 +1398,14 @@ def _find_intersection(plex_movies, lb_movies):
 KV = """
 #:import dp kivy.metrics.dp
 
-<NavBar>:
-    size_hint_y: None
-    height: dp(56)
-    spacing: 0
-    canvas.before:
-        Color:
-            rgba: 0.10, 0.10, 0.14, 1
-        Rectangle:
-            pos: self.pos
-            size: self.size
-
 <SectionLabel>:
     size_hint_y: None
     height: dp(36)
     font_size: dp(13)
     bold: True
     markup: True
-    color: 0.60, 0.60, 0.70, 1
+    theme_text_color: "Custom"
+    text_color: 0.60, 0.60, 0.70, 1
     halign: 'left'
     valign: 'middle'
     text_size: self.width, self.height
@@ -1314,7 +1434,7 @@ class PosterCache:
     @staticmethod
     def _dir():
         try:
-            base = App.get_running_app().user_data_dir
+            base = MDApp.get_running_app().user_data_dir
         except Exception:
             base = os.path.dirname(os.path.abspath(__file__))
         d = os.path.join(base, 'cinequeue_posters')
@@ -1459,11 +1579,11 @@ FLAG = {"JP": "🇯🇵", "KR": "🇰🇷", "FR": "🇫🇷", "UK": "🇬🇧", 
         "DE": "🇩🇪", "IT": "🇮🇹", "SE": "🇸🇪", "AU": "🇦🇺", "CN": "🇨🇳",
         "IN": "🇮🇳", "BR": "🇧🇷", "MX": "🇲🇽", "DK": "🇩🇰", "NO": "🇳🇴"}
 
-class SectionLabel(Label):
+class SectionLabel(MDLabel):
     pass
 
 # ── Downloads Screen ──────────────────────────────────────────────────────────
-class DownloadsScreen(Screen):
+class DownloadsScreen(MDScreen):
     """Tracks movies queued for download through the Prowlarr + qBittorrent pipeline.
 
     Status flow per entry:
@@ -1492,14 +1612,14 @@ class DownloadsScreen(Screen):
         'failed':        (0.95, 0.30, 0.30, 1),  # ACCENT
     }
     _STATUS_LABEL = {
-        'queued':        '● Queued',
-        'searching':     '● Searching Prowlarr…',
-        'results_found': '● Release found',
-        'no_results':    '● No releases found',
-        'grabbing':      '● Sending to qBit…',
-        'downloading':   '● Downloading',
-        'complete':      '● Complete',
-        'failed':        '● Failed',
+        'queued':        '• Queued',
+        'searching':     '• Searching Radarr…',
+        'results_found': '• Release found',
+        'no_results':    '• No releases found',
+        'grabbing':      '• Sending to qBit…',
+        'downloading':   '• Downloading',
+        'complete':      '• Complete',
+        'failed':        '• Failed',
     }
 
     def __init__(self, **kwargs):
@@ -1511,6 +1631,7 @@ class DownloadsScreen(Screen):
 
     def on_enter(self):
         self._rebuild_list()
+        self._poll()
         self._poll_ev = Clock.schedule_interval(lambda dt: self._poll(), 30)
 
     def on_leave(self):
@@ -1520,46 +1641,30 @@ class DownloadsScreen(Screen):
 
     def _build_ui(self):
         root = BoxLayout(orientation='vertical')
-        with root.canvas.before:
-            Color(*BG)
-            Rectangle(pos=root.pos, size=root.size)
 
-        hdr = BoxLayout(size_hint_y=None, height=dp(50), padding=[dp(12), dp(8)])
-        with hdr.canvas.before:
-            Color(0.10, 0.10, 0.14, 1)
-            self._hdr_rect = Rectangle(pos=hdr.pos, size=hdr.size)
-        hdr.bind(pos=lambda w, _: self._upd_rect(w),
-                 size=lambda w, _: self._upd_rect(w))
-        hdr.add_widget(Label(text="[b]Downloads[/b]", markup=True,
-                             font_size=dp(20), color=ACCENT,
-                             halign='left', valign='middle'))
-        refresh_btn = Button(text="↺", font_size=dp(18),
-                             size_hint_x=None, width=dp(40),
-                             background_normal="", background_color=(0,0,0,0),
-                             color=ACCENT2)
-        refresh_btn.bind(on_press=lambda *_: (self._poll(), self._rebuild_list()))
-        hdr.add_widget(refresh_btn)
+        hdr = MDTopAppBar(
+            title="Downloads",
+            md_bg_color=(0.10, 0.10, 0.14, 1),
+            specific_text_color=ACCENT,
+            elevation=0,
+            right_action_items=[["refresh", lambda x: (self._poll(), self._rebuild_list())]],
+        )
         root.add_widget(hdr)
 
         scroll = ScrollView()
         self._list_box = BoxLayout(orientation='vertical', size_hint_y=None,
                                    spacing=dp(8), padding=[dp(8), dp(8)])
         self._list_box.bind(minimum_height=self._list_box.setter('height'))
-        self._empty_lbl = Label(
+        self._empty_lbl = MDLabel(
             text="No downloads queued.\nTap Download on any movie not available on Plex.",
-            font_size=dp(13), color=SUBTEXT, halign='center', valign='middle',
+            font_size=dp(13), theme_text_color="Custom", text_color=SUBTEXT,
+            halign='center', valign='middle',
             size_hint_y=None, height=dp(120))
         self._empty_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
         self._list_box.add_widget(self._empty_lbl)
         scroll.add_widget(self._list_box)
         root.add_widget(scroll)
         self.add_widget(root)
-
-    def _upd_rect(self, w):
-        w.canvas.before.clear()
-        with w.canvas.before:
-            Color(0.10, 0.10, 0.14, 1)
-            Rectangle(pos=w.pos, size=w.size)
 
     def _rebuild_list(self):
         self._list_box.clear_widgets()
@@ -1570,26 +1675,30 @@ class DownloadsScreen(Screen):
             self._list_box.add_widget(self._make_entry_card(entry))
 
     def _make_entry_card(self, entry):
-        card = BoxLayout(orientation='vertical', size_hint_y=None,
-                         height=dp(110), padding=[dp(10), dp(8)], spacing=dp(4))
-        with card.canvas.before:
-            Color(*CARD)
-            RoundedRectangle(pos=card.pos, size=card.size, radius=[dp(10)])
-        card.bind(pos=lambda w, _: self._redraw_card(w),
-                  size=lambda w, _: self._redraw_card(w))
+        card = MDCard(
+            orientation='vertical',
+            size_hint_y=None,
+            height=dp(110),
+            padding=[dp(10), dp(8)],
+            spacing=dp(4),
+            md_bg_color=CARD,
+            radius=[dp(10)],
+        )
 
         # Row 1: title + status badge
         row1 = BoxLayout(size_hint_y=None, height=dp(22))
-        title_lbl = Label(
+        title_lbl = MDLabel(
             text=f"[b]{entry['title']}[/b]  ({entry.get('year','')})",
-            markup=True, font_size=dp(13), color=TEXT,
+            markup=True, font_size=dp(13),
+            theme_text_color="Custom", text_color=TEXT,
             halign='left', valign='middle')
         title_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
         status = entry.get('status', 'queued')
-        status_lbl = Label(
+        status_lbl = MDLabel(
             text=self._STATUS_LABEL.get(status, status),
             font_size=dp(10),
-            color=self._STATUS_COLOR.get(status, SUBTEXT),
+            theme_text_color="Custom",
+            text_color=self._STATUS_COLOR.get(status, SUBTEXT),
             size_hint_x=None, width=dp(130),
             halign='right', valign='middle')
         status_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
@@ -1599,14 +1708,15 @@ class DownloadsScreen(Screen):
 
         # Row 2: genre · director · added
         meta = f"{entry.get('genre','')}  ·  {entry.get('director','')}  ·  {entry.get('added_at','')}"
-        meta_lbl = Label(text=meta, font_size=dp(9), color=SUBTEXT,
-                         size_hint_y=None, height=dp(16),
-                         halign='left', valign='middle')
+        meta_lbl = MDLabel(text=meta, font_size=dp(9),
+                           theme_text_color="Custom", text_color=SUBTEXT,
+                           size_hint_y=None, height=dp(16),
+                           halign='left', valign='middle')
         meta_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
         card.add_widget(meta_lbl)
 
         # Row 3: progress bar or error/result info
-        if status == 'downloading':
+        if status in ('downloading', 'grabbing'):
             prog     = entry.get('progress', 0.0)
             eta_secs = entry.get('eta_secs', -1)
             pct_txt  = f"{int(prog * 100)}%"
@@ -1618,34 +1728,60 @@ class DownloadsScreen(Screen):
                 eta_txt = ''
             size_mb  = entry.get('size_bytes', 0) / 1024 / 1024
             size_txt = f"  {size_mb:.0f} MB" if size_mb > 0 else ''
-            info_lbl = Label(
+            info_lbl = MDLabel(
                 text=f"{pct_txt}{eta_txt}{size_txt}",
-                font_size=dp(10), color=ACCENT2,
+                font_size=dp(10), theme_text_color="Custom", text_color=ACCENT2,
                 size_hint_y=None, height=dp(16),
                 halign='left', valign='middle')
             info_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
             card.add_widget(info_lbl)
-            # Progress bar
-            pb_box = BoxLayout(size_hint_y=None, height=dp(8))
-            with pb_box.canvas.before:
-                Color(*CARD)
-                RoundedRectangle(pos=pb_box.pos, size=pb_box.size, radius=[dp(4)])
-            pb_box.bind(pos=lambda w, _: self._redraw_prog_bg(w),
-                        size=lambda w, _: self._redraw_prog_bg(w))
-            fill = BoxLayout(size_hint_x=max(prog, 0.02))
-            fill._fill_color = ACCENT2
-            with fill.canvas.before:
-                Color(*ACCENT2)
-                RoundedRectangle(pos=fill.pos, size=fill.size, radius=[dp(4)])
-            fill.bind(pos=lambda w, _: self._redraw_fill(w),
-                      size=lambda w, _: self._redraw_fill(w))
-            pb_box.add_widget(fill)
-            pb_box.add_widget(Widget(size_hint_x=1.0 - max(prog, 0.02)))
-            card.add_widget(pb_box)
+            prog_bar = MDProgressBar(
+                value=int(prog * 100),
+                max=100,
+                color=ACCENT2,
+                size_hint_y=None,
+                height=dp(8),
+            )
+            card.add_widget(prog_bar)
+
+            # Show Radarr link is stuck at 0% with no qBit activity for > 10 min
+            grabbing_since = entry.get('grabbing_since')
+            is_stuck = (
+                prog == 0.0
+                and not entry.get('qbit_hash')
+                and grabbing_since
+                and (time.time() - grabbing_since) > 600
+            )
+            if is_stuck:
+                radarr_base = Settings.get('radarr_url', '').rstrip('/')
+                # radarr_id = entry.get('radarr_id')
+                if radarr_base:
+                    # url = (f"{radarr_base}/movie/{radarr_id}"
+                    #        if radarr_id else f"{radarr_base}/activity/queuee")
+                    url = f"{radarr_base}/activity/queue"
+                    stuck_row = BoxLayout(size_hint_y=None, height=dp(24), spacing=dp(6))
+                    stuck_lbl = MDLabel(
+                        text = "Stuck - no activity",
+                        font_size=dp(9), theme_text_color="Custom", text_color=GOLD,
+                        size_hint_y=None, height=dp(24),
+                        halign='left', valign='middle',
+                    )
+                    stuck_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
+                    radarr_btn = MDFlatButton(
+                        text="Open in Raadarr",
+                        theme_text_color="Custom", text_color=ACCENT2,
+                        size_hint_x=None
+                    )
+                    radarr_btn.bind(on_press=lambda *_, u=url: webbrowser.open(u))
+                    stuck_row.add_widget(stuck_lbl)
+                    stuck_row.add_widget(radarr_btn)
+                    card.height = dp(140)
+                    card.add_widget(stuck_row)
         elif status == 'failed' and entry.get('error'):
-            err_lbl = Label(text=entry['error'], font_size=dp(9), color=ACCENT,
-                            size_hint_y=None, height=dp(16),
-                            halign='left', valign='middle')
+            err_lbl = MDLabel(text=entry['error'], font_size=dp(9),
+                              theme_text_color="Custom", text_color=ACCENT,
+                              size_hint_y=None, height=dp(16),
+                              halign='left', valign='middle')
             err_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
             card.add_widget(err_lbl)
         elif status == 'results_found' and entry.get('chosen'):
@@ -1654,51 +1790,33 @@ class DownloadsScreen(Screen):
             seeders   = chosen.get('seeders', '?')
             size_mb   = (chosen.get('size') or 0) / 1024 / 1024
             size_txt  = f"{size_mb:.0f} MB" if size_mb > 0 else ''
-            info_lbl = Label(
+            info_lbl = MDLabel(
                 text=f"{rel_title}  ·  {seeders} seeders  {size_txt}",
-                font_size=dp(9), color=ACCENT2,
+                font_size=dp(9), theme_text_color="Custom", text_color=ACCENT2,
                 size_hint_y=None, height=dp(16), halign='left', valign='middle')
             info_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
             card.add_widget(info_lbl)
         elif status == 'no_results':
-            retry_row = BoxLayout(size_hint_y=None, height=dp(24), spacing=dp(8))
-            retry_btn = Button(text="↺ Retry Search", font_size=dp(10),
-                               background_normal="", background_color=CARD,
-                               color=ACCENT2)
-            retry_btn.bind(on_press=lambda *_, eid=entry['id']:
-                           self._retry(eid))
+            retry_row = BoxLayout(size_hint_y=None, height=dp(28), spacing=dp(8))
+            retry_btn = MDFlatButton(
+                text="Retry Search",
+                theme_text_color="Custom", text_color=ACCENT2,
+            )
+            retry_btn.bind(on_press=lambda *_, eid=entry['id']: self._retry(eid))
             retry_row.add_widget(retry_btn)
             card.add_widget(retry_row)
 
         # Row: remove button
-        btn_row = BoxLayout(size_hint_y=None, height=dp(24), spacing=dp(8))
+        btn_row = BoxLayout(size_hint_y=None, height=dp(28), spacing=dp(8))
         btn_row.add_widget(Widget())
-        remove_btn = Button(text="Remove", font_size=dp(9),
-                            size_hint_x=None, width=dp(70),
-                            background_normal="", background_color=(0.3,0.1,0.1,1),
-                            color=ACCENT)
+        remove_btn = MDFlatButton(
+            text="Remove",
+            theme_text_color="Custom", text_color=ACCENT,
+        )
         remove_btn.bind(on_press=lambda *_, eid=entry['id']: self._remove(eid))
         btn_row.add_widget(remove_btn)
         card.add_widget(btn_row)
         return card
-
-    def _redraw_card(self, w):
-        w.canvas.before.clear()
-        with w.canvas.before:
-            Color(*CARD)
-            RoundedRectangle(pos=w.pos, size=w.size, radius=[dp(10)])
-
-    def _redraw_prog_bg(self, w):
-        w.canvas.before.clear()
-        with w.canvas.before:
-            Color(0.2, 0.2, 0.25, 1)
-            RoundedRectangle(pos=w.pos, size=w.size, radius=[dp(4)])
-
-    def _redraw_fill(self, w):
-        w.canvas.before.clear()
-        with w.canvas.before:
-            Color(*getattr(w, '_fill_color', ACCENT2))
-            RoundedRectangle(pos=w.pos, size=w.size, radius=[dp(4)])
 
     def _retry(self, entry_id):
         DownloadQueue.search_and_grab(entry_id, lambda e: self._rebuild_list())
@@ -1712,23 +1830,7 @@ class DownloadsScreen(Screen):
         self._rebuild_list()
 
 
-class NavBar(BoxLayout):
-    def __init__(self, manager, **kwargs):
-        super().__init__(**kwargs)
-        self.manager = manager
-        for label, name in [("Watch","watch"),("Recommend","recommend"),
-                             ("Analytics","analytics"),("Downloads","downloads"),
-                             ("Settings","settings")]:
-            btn = Button(text=label, font_size=dp(10), bold=True,
-                         background_color=(0,0,0,0), color=SUBTEXT)
-            btn.screen_name = name
-            btn.bind(on_press=self._switch)
-            self.add_widget(btn)
-
-    def _switch(self, btn):
-        self.manager.current = btn.screen_name
-        for b in self.children:
-            b.color = ACCENT if b is btn else SUBTEXT
+# NavBar replaced by MDBottomNavigation — see CineQueueApp._launch_main()
 
 
 class PosterWidget(FloatLayout):
@@ -1854,28 +1956,34 @@ class MoviePosterCard(RelativeLayout):
         return super().on_touch_up(touch)
 
 
-class FilterChip(ToggleButton):
-    def __init__(self, text, **kwargs):
-        super().__init__(text=text, **kwargs)
-        self.size_hint = (None, None)
-        self.size = (dp(90), dp(30))
-        self.font_size = dp(11)
-        self.background_normal = ""
-        self.background_down = ""
-        self.background_color = CARD
-        self.color = SUBTEXT
-        self.bind(state=self._on_state)
+class FilterChip(Button):
+    """ Toggle chip that works reliably across KivyMD versions. """
+    active = BooleanProperty(False)
+    def __init__(self, text, active=False, **kwargs):
+        super().__init__(
+            text=text,
+            size_hint=(None, None),
+            size=(dp(110), dp(34)),
+            background_normal='',
+            background_down='',
+            font_size=dp(12),
+            color=(1,1,1,1),
+            **kwargs,
+        )
+       
+        self.active = active
+        self._update_color()
+        self.bind(active=lambda *_: self._update_color())
+    
+    def on_release(self):
+        self.active = not self.active
 
-    def _on_state(self, *_):
-        if self.state == 'down':
-            self.background_color = ACCENT
-            self.color = TEXT
-        else:
-            self.background_color = CARD
-            self.color = SUBTEXT
+    def _update_color(self, *_):
+        self.background_color = ACCENT if self.active else CARD
+
 
 # ── Loading Screen ────────────────────────────────────────────────────────────
-class LoadingScreen(Screen):
+class LoadingScreen(MDScreen):
     """Shown on launch when credentials exist — preloads all data before continuing."""
     def __init__(self, on_ready, **kwargs):
         super().__init__(**kwargs)
@@ -1888,27 +1996,35 @@ class LoadingScreen(Screen):
 
     def _build_ui(self):
         root = BoxLayout(orientation='vertical', padding=dp(32), spacing=dp(20))
-        with root.canvas.before:
-            Color(*BG)
-            Rectangle(pos=root.pos, size=root.size)
         root.add_widget(Widget(size_hint_y=0.25))
 
-        title = Label(text="[b]CineQueue[/b]", markup=True,
-                      font_size=dp(36), color=ACCENT,
-                      size_hint_y=None, height=dp(54),
-                      halign='center', valign='middle')
+        title = MDLabel(text="[b]CineQueue[/b]", markup=True,
+                        font_size=dp(36),
+                        theme_text_color="Custom", text_color=ACCENT,
+                        size_hint_y=None, height=dp(54),
+                        halign='center', valign='middle')
         title.bind(size=lambda w, s: setattr(w, 'text_size', s))
         root.add_widget(title)
 
-        sub = Label(text="Loading your movies…", font_size=dp(13), color=SUBTEXT,
-                    size_hint_y=None, height=dp(30),
-                    halign='center', valign='middle')
+        sub = MDLabel(text="Loading your movies…", font_size=dp(13),
+                      theme_text_color="Custom", text_color=SUBTEXT,
+                      size_hint_y=None, height=dp(30),
+                      halign='center', valign='middle')
         sub.bind(size=lambda w, s: setattr(w, 'text_size', s))
         root.add_widget(sub)
 
-        self._status_lbl = Label(text="", font_size=dp(11), color=GOLD,
-                                  size_hint_y=None, height=dp(72),
-                                  halign='center', valign='top')
+        self._progress_bar = MDProgressBar(
+            type="indeterminate",
+            size_hint_y=None,
+            height=dp(4),
+            running_duration=1.4,
+        )
+        root.add_widget(self._progress_bar)
+
+        self._status_lbl = MDLabel(text="", font_size=dp(11),
+                                    theme_text_color="Custom", text_color=GOLD,
+                                    size_hint_y=None, height=dp(72),
+                                    halign='center', valign='top')
         self._status_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
         root.add_widget(self._status_lbl)
 
@@ -1922,6 +2038,7 @@ class LoadingScreen(Screen):
 
     def start(self, plex_url, plex_token, lb_username, tmdb_key, cached_plex=None, cached_lb=None):
         """Fetch fresh data. If cached_* lists are provided, only TMDB-enrich new movies."""
+        self._progress_bar.start()
         self._tmdb_key    = tmdb_key
         self._cached_plex = cached_plex or []
         self._cached_lb   = cached_lb   or []
@@ -2015,12 +2132,13 @@ class LoadingScreen(Screen):
         self._finish()
 
     def _finish(self):
+        self._progress_bar.stop()
         _notify_refresh()
         Clock.schedule_once(lambda dt: self._on_ready(), 0.4)
 
 
 # ── Watch Screen ──────────────────────────────────────────────────────────────
-class WatchScreen(Screen):
+class WatchScreen(MDScreen):
     SORT_OPTIONS = ["Plex Date", "LB Date", "Unique", "Foreign/EN", "Random", "Runtime"]
 
     def __init__(self, **kwargs):
@@ -2041,29 +2159,19 @@ class WatchScreen(Screen):
     def _build_ui(self):
         root = BoxLayout(orientation='vertical')
 
-        header = BoxLayout(size_hint_y=None, height=dp(50),
-                           padding=[dp(12), dp(8)])
-        with header.canvas.before:
-            Color(0.10, 0.10, 0.14, 1)
-            self._hdr_rect = Rectangle(pos=header.pos, size=header.size)
-        header.bind(pos=self._upd_hdr, size=self._upd_hdr)
-
-        title = Label(text="CineQueue", font_size=dp(20), bold=True,
-                      color=ACCENT, size_hint_x=0.6, halign='left',
-                      valign='middle')
-        title.bind(size=lambda w, s: setattr(w, 'text_size', s))
-        plex_dot = Label(text="● PLEX",
-                         font_size=dp(10), color=GREEN,
-                         size_hint_x=0.4, halign='right', valign='middle')
-        plex_dot.bind(size=lambda w, s: setattr(w, 'text_size', s))
-        header.add_widget(title)
-        header.add_widget(plex_dot)
+        header = MDTopAppBar(
+            title="CineQueue",
+            md_bg_color=(0.10, 0.10, 0.14, 1),
+            specific_text_color=ACCENT,
+            elevation=0,
+        )
         root.add_widget(header)
 
         # Status bar
-        self._status_lbl = Label(text="", font_size=dp(10), color=GOLD,
-                                 size_hint_y=None, height=dp(0),
-                                 halign='center', valign='middle')
+        self._status_lbl = MDLabel(text="", font_size=dp(10),
+                                   theme_text_color="Custom", text_color=GOLD,
+                                   size_hint_y=None, height=dp(0),
+                                   halign='center', valign='middle')
         self._status_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
         root.add_widget(self._status_lbl)
 
@@ -2074,16 +2182,23 @@ class WatchScreen(Screen):
 
         # Count selector — [−]  N  [+]
         inner.add_widget(SectionLabel(text="HOW MANY TO SUGGEST"))
-        count_row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(0))
-        minus_btn = Button(text="−", size_hint_x=None, width=dp(52),
-                           background_normal="", background_color=CARD,
-                           color=TEXT, font_size=dp(22), bold=True)
-        self._count_lbl = Label(text=str(self.selected_count),
-                                font_size=dp(24), bold=True, color=TEXT,
-                                halign='center', valign='middle')
-        plus_btn = Button(text="+", size_hint_x=None, width=dp(52),
-                          background_normal="", background_color=CARD,
-                          color=TEXT, font_size=dp(22), bold=True)
+        count_row = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(0))
+        minus_btn = MDIconButton(
+            icon="minus",
+            theme_icon_color="Custom",
+            icon_color=TEXT,
+            md_bg_color=CARD,
+        )
+        self._count_lbl = MDLabel(text=str(self.selected_count),
+                                  font_size=dp(24), bold=True,
+                                  theme_text_color="Custom", text_color=TEXT,
+                                  halign='center', valign='middle')
+        plus_btn = MDIconButton(
+            icon="plus",
+            theme_icon_color="Custom",
+            icon_color=TEXT,
+            md_bg_color=CARD,
+        )
         minus_btn.bind(on_press=self._decrement_count)
         plus_btn.bind(on_press=self._increment_count)
         count_row.add_widget(Widget())
@@ -2095,12 +2210,12 @@ class WatchScreen(Screen):
 
         # Sort chips
         inner.add_widget(SectionLabel(text="SORT / FILTER BY"))
-        sort_row = BoxLayout(size_hint_y=None, height=dp(36), spacing=dp(6))
+        sort_row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
         self._sort_chips = []
         for opt in self.SORT_OPTIONS:
             chip = FilterChip(text=opt,
-                              state='down' if opt in self.active_sorts else 'normal')
-            chip.bind(on_press=lambda c=chip, o=opt: self._toggle_sort(c, o))
+                              active=(opt in self.active_sorts))
+            chip.bind(active=lambda c, val, o=opt: self._on_chip_active(c, val, o))
             sort_row.add_widget(chip)
             self._sort_chips.append(chip)
         inner.add_widget(sort_row)
@@ -2128,27 +2243,35 @@ class WatchScreen(Screen):
         inner.add_widget(rs)
 
         # Download stub
-        dl_box = BoxLayout(orientation='vertical', size_hint_y=None,
-                           height=dp(100), spacing=dp(4), padding=[dp(8), dp(8)])
-        with dl_box.canvas.before:
-            Color(*CARD)
-            self._dl_rect = RoundedRectangle(pos=dl_box.pos, size=dl_box.size,
-                                              radius=[dp(10)])
-        dl_box.bind(pos=lambda w, _: self._upd_dl(w),
-                    size=lambda w, _: self._upd_dl(w))
-        dl_lbl = Label(text="[b]Download Pipeline[/b]  (Prowlarr + qBittorrent)",
-                       markup=True, font_size=dp(12), color=GOLD,
-                       size_hint_y=None, height=dp(20),
-                       halign='left', valign='middle')
+        dl_box = MDCard(
+            orientation='vertical',
+            size_hint_y=None,
+            height=dp(104),
+            spacing=dp(4),
+            padding=[dp(12), dp(10)],
+            md_bg_color=CARD,
+            radius=[dp(10)],
+        )
+        dl_lbl = MDLabel(text="[b]Download Pipeline[/b]  (Prowlarr + qBittorrent)",
+                         markup=True, font_size=dp(12),
+                         theme_text_color="Custom", text_color=GOLD,
+                         size_hint_y=None, height=dp(20),
+                         halign='left', valign='middle')
         dl_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
-        dl_sub = Label(
-            text="This feature is not yet available. Configure Prowlarr & qBittorrent\nin Settings to enable automated downloads.",
-            font_size=dp(10), color=SUBTEXT, size_hint_y=None, height=dp(36),
+        dl_sub = MDLabel(
+            text="This feature is not yet available. Configure Prowlarr & qBittorrent in Settings.",
+            font_size=dp(10), theme_text_color="Custom", text_color=SUBTEXT,
+            size_hint_y=None, height=dp(36),
             halign='left', valign='top')
         dl_sub.bind(size=lambda w, s: setattr(w, 'text_size', s))
-        dl_btn = Button(text="Download  (Coming Soon)", font_size=dp(11),
-                        background_normal="", background_color=(0.3, 0.3, 0.4, 1),
-                        color=SUBTEXT, size_hint_y=None, height=dp(30), disabled=True)
+        dl_btn = MDRaisedButton(
+            text="Download  (Coming Soon)",
+            font_size=dp(11),
+            md_bg_color=(0.3, 0.3, 0.4, 1),
+            theme_text_color="Custom", text_color=SUBTEXT,
+            size_hint_y=None, height=dp(32),
+            disabled=True,
+        )
         dl_box.add_widget(dl_lbl)
         dl_box.add_widget(dl_sub)
         dl_box.add_widget(dl_btn)
@@ -2159,19 +2282,9 @@ class WatchScreen(Screen):
         self.add_widget(root)
         self._refresh_movies()
 
-    def _upd_hdr(self, w, _):
-        self._hdr_rect.pos = w.pos
-        self._hdr_rect.size = w.size
-
-    def _upd_dl(self, w):
-        w.canvas.before.clear()
-        with w.canvas.before:
-            Color(*CARD)
-            RoundedRectangle(pos=w.pos, size=w.size, radius=[dp(10)])
-
     def set_status(self, msg, color=GOLD):
         self._status_lbl.text = msg
-        self._status_lbl.color = color
+        self._status_lbl.text_color = color
         self._status_lbl.height = dp(20) if msg else dp(0)
 
     def _decrement_count(self, *_):
@@ -2186,11 +2299,11 @@ class WatchScreen(Screen):
             self._count_lbl.text = str(self.selected_count)
             self._refresh_movies()
 
-    def _toggle_sort(self, chip, opt):
-        if opt in self.active_sorts:
-            self.active_sorts.discard(opt)
-        else:
+    def _on_chip_active(self, chip, is_active, opt):
+        if is_active:
             self.active_sorts.add(opt)
+        else:
+            self.active_sorts.discard(opt)
         self._refresh_movies()
 
     def _sort_movies(self, movies):
@@ -2249,9 +2362,9 @@ class WatchScreen(Screen):
 
         watch = self._sort_movies(_plex_movies)
         if not watch:
-            empty = Label(text="Nothing to show here",
-                          font_size=dp(13), color=SUBTEXT,
-                          halign='center', valign='middle')
+            empty = MDLabel(text="Nothing to show here",
+                            font_size=dp(13), theme_text_color="Custom",
+                            text_color=SUBTEXT, halign='center', valign='middle')
             empty.bind(size=lambda w, s: setattr(w, 'text_size', s))
             self._watch_container.add_widget(empty)
         else:
@@ -2264,9 +2377,9 @@ class WatchScreen(Screen):
 
         rec = self._sort_movies(_plex_movies + _lb_movies)
         if not rec:
-            empty = Label(text="Nothing to show here",
-                          font_size=dp(13), color=SUBTEXT,
-                          halign='center', valign='middle')
+            empty = MDLabel(text="Nothing to show here",
+                            font_size=dp(13), theme_text_color="Custom",
+                            text_color=SUBTEXT, halign='center', valign='middle')
             empty.bind(size=lambda w, s: setattr(w, 'text_size', s))
             self._rec_container.add_widget(empty)
         else:
@@ -2278,12 +2391,12 @@ class WatchScreen(Screen):
             dp(130) * max(len(rec), 1) + dp(8) * max(len(rec)-1, 0), Window.width)
 
     def _show_detail(self, movie):
-        content = BoxLayout(orientation='vertical', spacing=dp(8), padding=dp(16))
-        with content.canvas.before:
-            Color(*BG)
-            Rectangle(pos=content.pos, size=content.size)
+        on_plex = movie.get('source') == 'plex' or movie.get('on_plex', False)
 
-        poster = PosterWidget(movie, h=dp(360))
+        content = BoxLayout(orientation='vertical', spacing=dp(8),
+                            size_hint_y=None, height=dp(520))
+
+        poster = PosterWidget(movie, h=dp(300))
         content.add_widget(poster)
 
         for line in [
@@ -2292,70 +2405,65 @@ class WatchScreen(Screen):
             f"Genre: {movie.get('genre','?')}  |  Country: {movie.get('country','?')}",
             f"Rating: {movie['rating']}  |  Runtime: {movie.get('runtime','?')} min",
         ]:
-            lbl = Label(text=line, markup=True, font_size=dp(12), color=TEXT,
-                        halign='left', valign='middle',
-                        size_hint_y=None, height=dp(22))
+            lbl = MDLabel(text=line, markup=True, font_size=dp(12),
+                          theme_text_color="Custom", text_color=TEXT,
+                          halign='left', valign='middle',
+                          size_hint_y=None, height=dp(24))
             lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
             content.add_widget(lbl)
 
-        on_plex = movie.get('source') == 'plex' or movie.get('on_plex', False)
-
-        if on_plex:
-            watch_btn = Button(text="▶  Watch on Plex",
-                               size_hint_y=None, height=dp(40),
-                               background_normal="", background_color=GREEN,
-                               color=TEXT, font_size=dp(13), bold=True)
-            content.add_widget(watch_btn)
-        else:
-            dl_btn = Button(text="▼  Queue Download",
-                            size_hint_y=None, height=dp(40),
-                            background_normal="", background_color=ACCENT2,
-                            color=TEXT, font_size=dp(13), bold=True)
-            avail_lbl = Label(text="Not available on Plex — queue via Prowlarr",
-                              font_size=dp(10), color=GOLD,
-                              size_hint_y=None, height=dp(18),
-                              halign='center', valign='middle')
+        if not on_plex:
+            avail_lbl = MDLabel(
+                text="Not available on Plex — queue via Radarr",
+                font_size=dp(10), theme_text_color="Custom", text_color=GOLD,
+                size_hint_y=None, height=dp(20),
+                halign='center', valign='middle')
             avail_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
             content.add_widget(avail_lbl)
-            content.add_widget(dl_btn)
 
-        close_btn = Button(text="Close", size_hint_y=None, height=dp(36),
-                           background_normal="", background_color=CARD,
-                           color=SUBTEXT, font_size=dp(12))
-        content.add_widget(close_btn)
+        close_btn = MDFlatButton(text="Close",
+                                 theme_text_color="Custom", text_color=SUBTEXT)
+        if on_plex:
+            action_btn = MDRaisedButton(text="Watch on Plex", md_bg_color=GREEN)
+        else:
+            action_btn = MDRaisedButton(text="Queue Download", md_bg_color=ACCENT2)
 
-        popup = Popup(title=movie['title'], content=content,
-                      size_hint=(0.9, 0.82),
-                      background_color=(0.10, 0.10, 0.14, 1), title_color=TEXT)
+        dialog = MDDialog(
+            title=movie['title'],
+            type="custom",
+            content_cls=content,
+            buttons=[close_btn, action_btn],
+            md_bg_color=(0.10, 0.10, 0.14, 1),
+        )
+
+        close_btn.bind(on_press=lambda *_: dialog.dismiss())
 
         if on_plex:
-            def _open_plex(btn, m=movie):
+            def _open_plex(*args, m=movie):
                 plex_url = Settings.get('plex_url', '').rstrip('/')
                 if plex_url:
                     webbrowser.open(plex_url + '/web/index.html')
-                popup.dismiss()
-            watch_btn.bind(on_press=_open_plex)
+                dialog.dismiss()
+            action_btn.bind(on_press=_open_plex)
         else:
-            def _queue_dl(btn, m=movie):
+            def _queue_dl(*args, m=movie):
                 entry = DownloadQueue.add(m)
                 if entry:
                     DownloadQueue.search_and_grab(entry['id'], lambda e: None)
-                    popup.dismiss()
-                    # Switch to Downloads tab
-                    app = App.get_running_app()
-                    if app and hasattr(app, '_sm'):
-                        app._sm.current = 'downloads'
+                    dialog.dismiss()
+                    app = MDApp.get_running_app()
+                    if app and hasattr(app, '_nav'):
+                        app._nav.switch_tab('downloads')
                 else:
-                    dl_btn.text = "Already queued"
-                    dl_btn.background_color = SUBTEXT
-            dl_btn.bind(on_press=_queue_dl)
+                    action_btn.text = "Already queued"
+                    action_btn.md_bg_color = SUBTEXT
+            action_btn.bind(on_press=_queue_dl)
 
-        close_btn.bind(on_press=popup.dismiss)
-        popup.open()
+        dialog.open()
 
 
 # ── Recommend Screen ──────────────────────────────────────────────────────────
-class RecommendScreen(Screen):
+class RecommendScreen(MDScreen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._all          = []
@@ -2387,33 +2495,39 @@ class RecommendScreen(Screen):
             self._bg_rect = Rectangle(pos=root.pos, size=root.size)
         root.bind(pos=self._upd_bg, size=self._upd_bg)
 
-        root.add_widget(Label(
+        root.add_widget(MDLabel(
             text="[b]Swipe to Decide[/b]", markup=True,
-            font_size=dp(18), color=TEXT,
-            size_hint_y=None, height=dp(44)))
+            font_size=dp(18), theme_text_color="Custom", text_color=TEXT,
+            size_hint_y=None, height=dp(44),
+            halign='center', valign='middle'))
 
-        root.add_widget(Label(
+        root.add_widget(MDLabel(
             text="→ Watch      ← Skip      ↓ Not Interested",
-            font_size=dp(10), color=SUBTEXT,
-            size_hint_y=None, height=dp(22)))
+            font_size=dp(10), theme_text_color="Custom", text_color=SUBTEXT,
+            size_hint_y=None, height=dp(22),
+            halign='center', valign='middle'))
 
         # Card area: flexible height, fills whatever remains after header + buttons
         self._card_area = FloatLayout(size_hint=(1, 1))
         root.add_widget(self._card_area)
 
-        btn_row = BoxLayout(size_hint_y=None, height=dp(56),
-                            padding=[dp(20), dp(6)], spacing=dp(12))
-        skip_btn = Button(text="Skip",
-                          background_normal="",
-                          background_color=(0.35, 0.15, 0.15, 1),
-                          color=TEXT, font_size=dp(13))
-        nope_btn = Button(text="Nope",
-                          background_normal="",
-                          background_color=(0.25, 0.20, 0.10, 1),
-                          color=TEXT, font_size=dp(12))
-        watch_btn = Button(text="Watch",
-                           background_normal="", background_color=GREEN,
-                           color=TEXT, font_size=dp(13), bold=True)
+        btn_row = BoxLayout(size_hint_y=None, height=dp(60),
+                            padding=[dp(12), dp(6)], spacing=dp(12))
+        skip_btn = MDRaisedButton(
+            text="Skip",
+            md_bg_color=(0.35, 0.15, 0.15, 1),
+            theme_text_color="Custom", text_color=TEXT,
+        )
+        nope_btn = MDRaisedButton(
+            text="Nope",
+            md_bg_color=(0.25, 0.20, 0.10, 1),
+            theme_text_color="Custom", text_color=TEXT,
+        )
+        watch_btn = MDRaisedButton(
+            text="Watch",
+            md_bg_color=GREEN,
+            theme_text_color="Custom", text_color=TEXT,
+        )
         skip_btn.bind(on_press=lambda *_: self._animate('skip'))
         nope_btn.bind(on_press=lambda *_: self._animate('not_interested'))
         watch_btn.bind(on_press=lambda *_: self._animate('accept'))
@@ -2433,9 +2547,10 @@ class RecommendScreen(Screen):
         self._card_area.clear_widgets()
         self._current_card = None
         if self._idx >= len(self._all):
-            self._card_area.add_widget(Label(
+            self._card_area.add_widget(MDLabel(
                 text="No more movies!\nReset to start over.",
-                font_size=dp(16), color=SUBTEXT, halign='center',
+                font_size=dp(16), theme_text_color="Custom", text_color=SUBTEXT,
+                halign='center',
                 pos_hint={'center_x': 0.5, 'center_y': 0.5},
                 size_hint=(0.8, None), height=dp(60)))
             return
@@ -2477,35 +2592,40 @@ class RecommendScreen(Screen):
              SUBTEXT, dp(11)),
             (f"Dir: {movie.get('director','?')}", SUBTEXT, dp(10)),
         ]:
-            lbl = Label(text=text, markup=True, font_size=size, color=color,
-                        halign='left', valign='middle',
-                        size_hint_y=None, height=dp(20))
+            lbl = MDLabel(text=text, markup=True, font_size=size,
+                          theme_text_color="Custom", text_color=color,
+                          halign='left', valign='middle',
+                          size_hint_y=None, height=dp(20))
             lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
             info.add_widget(lbl)
 
         on_plex = movie.get('source') == 'plex' or movie.get('on_plex', False)
-        avail_text  = "● Available on Plex" if on_plex else "● Not on Plex"
+        avail_text  = "• Available on Plex" if on_plex else "• Not on Plex"
         avail_color = GREEN if on_plex else GOLD
-        avail = Label(text=avail_text, font_size=dp(10), color=avail_color,
-                      halign='left', valign='middle',
-                      size_hint_y=None, height=dp(18))
+        avail = MDLabel(text=avail_text, font_size=dp(10),
+                        theme_text_color="Custom", text_color=avail_color,
+                        halign='left', valign='middle',
+                        size_hint_y=None, height=dp(18))
         avail.bind(size=lambda w, s: setattr(w, 'text_size', s))
         info.add_widget(avail)
 
         if not on_plex:
-            dl_btn = Button(text="▼  Queue Download", font_size=dp(10),
-                            size_hint_y=None, height=dp(28),
-                            background_normal="", background_color=ACCENT2,
-                            color=TEXT)
+            dl_btn = MDRaisedButton(
+                text="Queue Download",
+                font_size=dp(10),
+                size_hint_y=None,
+                md_bg_color=ACCENT2,
+                theme_text_color="Custom", text_color=TEXT,
+            )
             def _queue(btn, m=movie):
                 entry = DownloadQueue.add(m)
                 if entry:
                     DownloadQueue.search_and_grab(entry['id'], lambda e: None)
-                    btn.text = "● Queued"
-                    btn.background_color = SUBTEXT
+                    btn.text = "Queued"
+                    btn.md_bg_color = SUBTEXT
                 else:
                     btn.text = "Already queued"
-                    btn.background_color = SUBTEXT
+                    btn.md_bg_color = SUBTEXT
             dl_btn.bind(on_press=_queue)
             info.add_widget(dl_btn)
 
@@ -2585,18 +2705,18 @@ class RecommendScreen(Screen):
         anim.start(card)
 
     def _show_toast(self, msg):
-        popup = Popup(
-            title="",
-            content=Label(text=msg, font_size=dp(12), color=TEXT, halign='center'),
-            size_hint=(0.85, None), height=dp(80),
-            background_color=(0.15, 0.15, 0.20, 1),
-            title_color=TEXT, auto_dismiss=True)
-        popup.open()
-        Clock.schedule_once(popup.dismiss, 2)
+        Snackbar(
+            text=msg,
+            snackbar_x=dp(8),
+            snackbar_y=dp(72),
+            size_hint_x=0.85,
+            duration=2,
+            bg_color=(0.15, 0.15, 0.20, 1),
+        ).open()
 
 
 # ── Analytics Screen ──────────────────────────────────────────────────────────
-class AnalyticsScreen(Screen):
+class AnalyticsScreen(MDScreen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._build_ui()
@@ -2609,13 +2729,13 @@ class AnalyticsScreen(Screen):
 
     def _build_ui(self):
         root = BoxLayout(orientation='vertical')
-        with root.canvas.before:
-            Color(*BG)
-            Rectangle(pos=root.pos, size=root.size)
 
-        root.add_widget(Label(text="[b]Analytics[/b]", markup=True,
-                              font_size=dp(20), color=ACCENT,
-                              size_hint_y=None, height=dp(50)))
+        root.add_widget(MDTopAppBar(
+            title="Analytics",
+            md_bg_color=(0.10, 0.10, 0.14, 1),
+            specific_text_color=ACCENT,
+            elevation=0,
+        ))
 
         scroll = ScrollView()
         inner  = BoxLayout(orientation='vertical', size_hint_y=None,
@@ -2653,20 +2773,22 @@ class AnalyticsScreen(Screen):
             ("On Plex",       str(len(_plex_movies)), ACCENT2),
             ("Plex + LB",     str(on_both),           GOLD),
         ]
-        stat_row = BoxLayout(size_hint_y=None, height=dp(80), spacing=dp(8))
+        stat_row = BoxLayout(size_hint_y=None, height=dp(88), spacing=dp(8))
         for label, val, color in stats:
-            card = BoxLayout(orientation='vertical', spacing=dp(4), padding=dp(8))
-            with card.canvas.before:
-                Color(*CARD)
-                RoundedRectangle(pos=card.pos, size=card.size, radius=[dp(10)])
-            card.bind(pos=lambda w, _: self._redraw(w),
-                      size=lambda w, _: self._redraw(w))
-            vl = Label(text=f"[b]{val}[/b]", markup=True,
-                       font_size=dp(22), color=color,
-                       halign='center', valign='middle')
+            card = MDCard(
+                orientation='vertical',
+                spacing=dp(4),
+                padding=dp(8),
+                md_bg_color=CARD,
+                radius=[dp(10)],
+            )
+            vl = MDLabel(text=f"[b]{val}[/b]", markup=True,
+                         font_size=dp(22), theme_text_color="Custom", text_color=color,
+                         halign='center', valign='middle')
             vl.bind(size=lambda w, s: setattr(w, 'text_size', s))
-            ll = Label(text=label, font_size=dp(10), color=SUBTEXT,
-                       halign='center', valign='middle')
+            ll = MDLabel(text=label, font_size=dp(10),
+                         theme_text_color="Custom", text_color=SUBTEXT,
+                         halign='center', valign='middle')
             ll.bind(size=lambda w, s: setattr(w, 'text_size', s))
             card.add_widget(vl)
             card.add_widget(ll)
@@ -2680,20 +2802,22 @@ class AnalyticsScreen(Screen):
             (f"Added to\nWatchlist",     str(added_watchlist_this_year), GOLD),
             (f"Watched\nOutside List",   str(watched_outside_watchlist), GREEN),
         ]
-        year_row = BoxLayout(size_hint_y=None, height=dp(80), spacing=dp(8))
+        year_row = BoxLayout(size_hint_y=None, height=dp(88), spacing=dp(8))
         for label, val, color in year_stats:
-            card = BoxLayout(orientation='vertical', spacing=dp(4), padding=dp(8))
-            with card.canvas.before:
-                Color(*CARD)
-                RoundedRectangle(pos=card.pos, size=card.size, radius=[dp(10)])
-            card.bind(pos=lambda w, _: self._redraw(w),
-                      size=lambda w, _: self._redraw(w))
-            vl = Label(text=f"[b]{val}[/b]", markup=True,
-                       font_size=dp(22), color=color,
-                       halign='center', valign='middle')
+            card = MDCard(
+                orientation='vertical',
+                spacing=dp(4),
+                padding=dp(8),
+                md_bg_color=CARD,
+                radius=[dp(10)],
+            )
+            vl = MDLabel(text=f"[b]{val}[/b]", markup=True,
+                         font_size=dp(22), theme_text_color="Custom", text_color=color,
+                         halign='center', valign='middle')
             vl.bind(size=lambda w, s: setattr(w, 'text_size', s))
-            ll = Label(text=label, font_size=dp(9), color=SUBTEXT,
-                       halign='center', valign='middle')
+            ll = MDLabel(text=label, font_size=dp(9),
+                         theme_text_color="Custom", text_color=SUBTEXT,
+                         halign='center', valign='middle')
             ll.bind(size=lambda w, s: setattr(w, 'text_size', s))
             card.add_widget(vl)
             card.add_widget(ll)
@@ -2723,31 +2847,23 @@ class AnalyticsScreen(Screen):
             (f"Plex  ({plex_pct}%)",        plex_pct, GREEN),
             (f"Aggregated  ({agg_pct}%)",   agg_pct, GOLD),
         ]:
-            lbl = Label(text=bar_label, font_size=dp(10), color=SUBTEXT,
-                        size_hint_y=None, height=dp(16), halign='left', valign='middle')
+            lbl = MDLabel(text=bar_label, font_size=dp(10),
+                          theme_text_color="Custom", text_color=SUBTEXT,
+                          size_hint_y=None, height=dp(16), halign='left', valign='middle')
             lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
             inner.add_widget(lbl)
-            prog_box = BoxLayout(size_hint_y=None, height=dp(14))
-            with prog_box.canvas.before:
-                Color(*CARD)
-                RoundedRectangle(pos=prog_box.pos, size=prog_box.size, radius=[dp(7)])
-            prog_box.bind(pos=lambda w, _: self._upd_prog(w),
-                          size=lambda w, _: self._upd_prog(w))
-            fill = BoxLayout(size_hint=(max(bar_pct, 1) / 100, 1))
-            fill._fill_color = bar_color
-            with fill.canvas.before:
-                Color(*bar_color)
-                RoundedRectangle(pos=fill.pos, size=fill.size, radius=[dp(7)])
-            fill.bind(pos=lambda w, _: self._upd_fill(w),
-                      size=lambda w, _: self._upd_fill(w))
-            prog_box.add_widget(fill)
-            if bar_pct < 100:
-                prog_box.add_widget(Widget(size_hint_x=(100 - bar_pct) / 100))
-            inner.add_widget(prog_box)
+            prog_bar = MDProgressBar(
+                value=bar_pct,
+                max=100,
+                color=bar_color,
+                size_hint_y=None,
+                height=dp(14),
+            )
+            inner.add_widget(prog_bar)
 
-        overlap_lbl = Label(
-            text=f"● {overlap} titles on both Plex and Letterboxd watchlist",
-            font_size=dp(10), color=GOLD,
+        overlap_lbl = MDLabel(
+            text=f"• {overlap} titles on both Plex and Letterboxd watchlist",
+            font_size=dp(10), theme_text_color="Custom", text_color=GOLD,
             size_hint_y=None, height=dp(20), halign='left', valign='middle')
         overlap_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
         inner.add_widget(overlap_lbl)
@@ -2759,11 +2875,13 @@ class AnalyticsScreen(Screen):
             genres[g] = genres.get(g, 0) + 1
         for genre, cnt in sorted(genres.items(), key=lambda x: -x[1]):
             row = BoxLayout(size_hint_y=None, height=dp(28), spacing=dp(8))
-            gl = Label(text=genre, font_size=dp(11), color=TEXT,
-                       size_hint_x=0.4, halign='left', valign='middle')
+            gl = MDLabel(text=genre, font_size=dp(11),
+                         theme_text_color="Custom", text_color=TEXT,
+                         size_hint_x=0.4, halign='left', valign='middle')
             gl.bind(size=lambda w, s: setattr(w, 'text_size', s))
-            cl = Label(text=str(cnt), font_size=dp(11), color=SUBTEXT,
-                       size_hint_x=0.15, halign='right', valign='middle')
+            cl = MDLabel(text=str(cnt), font_size=dp(11),
+                         theme_text_color="Custom", text_color=SUBTEXT,
+                         size_hint_x=0.15, halign='right', valign='middle')
             cl.bind(size=lambda w, s: setattr(w, 'text_size', s))
             row.add_widget(gl)
             row.add_widget(Widget(size_hint_x=0.45))
@@ -2776,10 +2894,11 @@ class AnalyticsScreen(Screen):
             c = m.get('country', '?')
             countries[c] = countries.get(c, 0) + 1
         for country, cnt in sorted(countries.items(), key=lambda x: -x[1]):
-            lbl = Label(text=f"[b]{country}[/b]  —  {cnt} titles",
-                        markup=True, font_size=dp(12), color=TEXT,
-                        size_hint_y=None, height=dp(26),
-                        halign='left', valign='middle')
+            lbl = MDLabel(text=f"[b]{country}[/b]  —  {cnt} titles",
+                          markup=True, font_size=dp(12),
+                          theme_text_color="Custom", text_color=TEXT,
+                          size_hint_y=None, height=dp(26),
+                          halign='left', valign='middle')
             lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
             inner.add_widget(lbl)
 
@@ -2792,10 +2911,10 @@ class AnalyticsScreen(Screen):
             except Exception:
                 pass
         for day, cnt in sorted(day_counts.items(), key=lambda x: -x[1])[:5]:
-            lbl = Label(text=f"{day}: {cnt} movies",
-                        font_size=dp(12), color=TEXT,
-                        size_hint_y=None, height=dp(24),
-                        halign='left', valign='middle')
+            lbl = MDLabel(text=f"{day}: {cnt} movies",
+                          font_size=dp(12), theme_text_color="Custom", text_color=TEXT,
+                          size_hint_y=None, height=dp(24),
+                          halign='left', valign='middle')
             lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
             inner.add_widget(lbl)
 
@@ -2809,9 +2928,10 @@ class AnalyticsScreen(Screen):
             (f"Avg Rating: {avg_r:.1f} / 10", GOLD),
             (f"Avg Runtime: {avg_rt} min  ({avg_rt//60}h {avg_rt%60}m)", ACCENT2),
         ]:
-            lbl = Label(text=text, markup=True, font_size=dp(13), color=color,
-                        size_hint_y=None, height=dp(30),
-                        halign='left', valign='middle')
+            lbl = MDLabel(text=text, markup=True, font_size=dp(13),
+                          theme_text_color="Custom", text_color=color,
+                          size_hint_y=None, height=dp(30),
+                          halign='left', valign='middle')
             lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
             inner.add_widget(lbl)
 
@@ -2819,28 +2939,9 @@ class AnalyticsScreen(Screen):
         root.add_widget(scroll)
         self.add_widget(root)
 
-    def _upd_prog(self, w):
-        w.canvas.before.clear()
-        with w.canvas.before:
-            Color(*CARD)
-            RoundedRectangle(pos=w.pos, size=w.size, radius=[dp(7)])
-
-    def _upd_fill(self, w):
-        w.canvas.before.clear()
-        # Inherit color from the fill widget's stored color (set at creation)
-        with w.canvas.before:
-            Color(*getattr(w, '_fill_color', GREEN))
-            RoundedRectangle(pos=w.pos, size=w.size, radius=[dp(7)])
-
-    def _redraw(self, w):
-        w.canvas.before.clear()
-        with w.canvas.before:
-            Color(*CARD)
-            RoundedRectangle(pos=w.pos, size=w.size, radius=[dp(10)])
-
 
 # ── Settings Screen ───────────────────────────────────────────────────────────
-class SettingsScreen(Screen):
+class SettingsScreen(MDScreen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._inputs      = {}   # key -> TextInput
@@ -2853,110 +2954,121 @@ class SettingsScreen(Screen):
 
     def _build_ui(self):
         root = BoxLayout(orientation='vertical')
-        with root.canvas.before:
-            Color(*BG)
-            Rectangle(pos=root.pos, size=root.size)
 
-        root.add_widget(Label(text="[b]Settings[/b]", markup=True,
-                              font_size=dp(20), color=ACCENT,
-                              size_hint_y=None, height=dp(50)))
+        root.add_widget(MDTopAppBar(
+            title="Settings",
+            md_bg_color=(0.10, 0.10, 0.14, 1),
+            specific_text_color=ACCENT,
+            elevation=0,
+        ))
 
-        self._status_lbl = Label(text="", font_size=dp(10), color=GOLD,
-                                 size_hint_y=None, height=dp(24),
-                                 halign='center', valign='middle')
+        self._status_lbl = MDLabel(text="", font_size=dp(10),
+                                   theme_text_color="Custom", text_color=GOLD,
+                                   size_hint_y=None, height=dp(24),
+                                   halign='center', valign='middle')
         self._status_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
         root.add_widget(self._status_lbl)
 
         scroll = ScrollView()
         inner  = BoxLayout(orientation='vertical', size_hint_y=None,
-                           spacing=dp(10), padding=[dp(12), dp(8)])
+                           spacing=dp(6), padding=[dp(12), dp(8)])
         inner.bind(minimum_height=inner.setter('height'))
 
         sections = [
             ("PLEX SERVER", [
-                ("plex_url",   "Server URL",   "http://192.168.1.100:32400", False),
-                ("plex_token", "Plex Token",   "xxxxxxxxxxxxxxxx",           True),
+                ("plex_url",   "Plex Server URL",   "http://192.168.1.100:32400", False),
+                ("plex_token", "Plex Token",         "xxxxxxxxxxxxxxxx",           True),
             ]),
             ("LETTERBOXD", [
-                ("lb_username", "Username", "@yourusername", False),
+                ("lb_username", "Letterboxd Username", "@yourusername", False),
             ]),
             ("SYNOLOGY NAS (Services)", [
                 ("dsm_port",      "DSM Port",           "5000",                False),
                 ("dsm_username",  "NAS Username",       "admin",               False),
                 ("dsm_password",  "NAS Password",       "your password",       True),
-                ("qbit_project",  "VPN+qBit Project",   "qbittorent-gluetun",  False),
+                ("qbit_project",  "VPN+qBit Project",   "qbittorrent-gluetun",  False),
                 ("arr_project",   "Arr Stack Project",  "arr-apps",            False),
             ]),
             ("RADARR (Movie Downloads)", [
-                ("radarr_url",     "Radarr URL",  "http://192.168.1.100:7878", False),
-                ("radarr_api_key", "API Key",     "your-radarr-api-key",       True),
+                ("radarr_url",     "Radarr URL",  "http://192.168.4.201:7878", False),
+                ("radarr_api_key", "Radarr API Key", "your-radarr-api-key",    True),
             ]),
             ("PROWLARR (Indexer Proxy — future use)", [
-                ("prowlarr_url",     "Prowlarr URL",  "http://192.168.1.100:9696", False),
-                ("prowlarr_api_key", "API Key",       "your-prowlarr-api-key",     True),
+                ("prowlarr_url",     "Prowlarr URL",     "http://192.168.4.201:9696", False),
+                ("prowlarr_api_key", "Prowlarr API Key", "your-prowlarr-api-key",     True),
             ]),
             ("QBITTORRENT (Download Client)", [
-                ("qbit_url",      "Web UI URL",   "http://192.168.1.100:8080", False),
-                ("qbit_username", "Username",     "admin",                     False),
-                ("qbit_password", "Password",     "adminadmin",                True),
+                ("qbit_url",      "qBit Web UI URL", "http://192.168.4.201:8080", False),
+                ("qbit_username", "qBit Username",   "admin",                     False),
+                ("qbit_password", "qBit Password",   "adminadmin",                True),
             ]),
             ("TMDB (Movie Posters)", [
-                ("tmdb_key", "API Key", "Get free key at themoviedb.org", False),
+                ("tmdb_key", "TMDB API Key", "Get free key at themoviedb.org", False),
             ]),
             ("STREAMING SERVICES (Coming Soon)", [
-                ("netflix_token", "Netflix",    "Not connected", False),
-                ("disney_token",  "Disney+",    "Not connected", False),
-                ("prime_token",   "Prime Video","Not connected", False),
+                ("netflix_token", "Netflix Token",      "Not connected", False),
+                ("disney_token",  "Disney+ Token",      "Not connected", False),
+                ("prime_token",   "Prime Video Token",  "Not connected", False),
             ]),
         ]
 
         for section_title, fields in sections:
             inner.add_widget(SectionLabel(text=section_title))
             for key, field_name, placeholder, is_pass in fields:
-                row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
-                lbl = Label(text=field_name, font_size=dp(11), color=TEXT,
-                            size_hint_x=0.38, halign='left', valign='middle')
-                lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
-                inp = TextInput(hint_text=placeholder, password=is_pass,
-                                size_hint_x=0.62, font_size=dp(11),
-                                background_color=CARD, foreground_color=TEXT,
-                                cursor_color=ACCENT, multiline=False,
-                                padding=[dp(8), dp(8)])
+                inp = MDTextField(
+                    hint_text=field_name,
+                    helper_text=placeholder,
+                    helper_text_mode="on_focus",
+                    password=is_pass,
+                    mode="rectangle", # ['rectangle', 'round', 'fill', 'line']
+                    size_hint_y=None,
+                    height=dp(56),
+                    line_color_normal=(*SUBTEXT[:3], 0.5),
+                    line_color_focus=ACCENT,
+                    hint_text_color_normal=SUBTEXT,
+                    text_color_normal=TEXT,
+                )
                 self._inputs[key] = inp
-                row.add_widget(lbl)
-                row.add_widget(inp)
-                inner.add_widget(row)
+                inner.add_widget(inp)
 
         # Services control
         inner.add_widget(SectionLabel(text="SERVICE CONTROL"))
-        svc_note = Label(
-            text="NAS IP is read from your Plex URL. Requires DSM API Key above.",
-            font_size=dp(10), color=SUBTEXT, size_hint_y=None, height=dp(24),
+        svc_note = MDLabel(
+            text="NAS IP is read from your Plex URL. Requires DSM credentials above.",
+            font_size=dp(10), theme_text_color="Custom", text_color=SUBTEXT,
+            size_hint_y=None, height=dp(24),
             halign='left', valign='middle')
         svc_note.bind(size=lambda w, s: setattr(w, 'text_size', s))
         inner.add_widget(svc_note)
 
-        self._svc_rows = {}  # service_key -> {'status_lbl': Label}
+        self._svc_rows = {}
         for svc_key, svc_label in [('plex',      'Plex Media Server'),
                                     ('qbit_proj', 'VPN + qBittorrent'),
                                     ('arr_proj',  'Prowlarr / Sonarr / Radarr')]:
-            row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(4))
-            name_lbl = Label(text=svc_label, font_size=dp(10), color=TEXT,
-                             size_hint_x=0.30, halign='left', valign='middle')
+            row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(4))
+            name_lbl = MDLabel(text=svc_label, font_size=dp(10),
+                               theme_text_color="Custom", text_color=TEXT,
+                               size_hint_x=0.30, halign='left', valign='middle')
             name_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
-            status_lbl = Label(text="● unknown", font_size=dp(9), color=SUBTEXT,
-                               size_hint_x=0.28, halign='left', valign='middle')
+            status_lbl = MDLabel(text="• unknown", font_size=dp(9),
+                                 theme_text_color="Custom", text_color=SUBTEXT,
+                                 size_hint_x=0.28, halign='left', valign='middle')
             status_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
-            # ▶ play (green), ■ stop (red), ↺ refresh (blue) — all plain BMP symbols
-            play_b = Button(text="▶", font_size=dp(14),
-                            size_hint_x=None, width=dp(36),
-                            background_normal="", background_color=GREEN, color=TEXT)
-            stop_b = Button(text="■", font_size=dp(14),
-                            size_hint_x=None, width=dp(36),
-                            background_normal="", background_color=ACCENT, color=TEXT)
-            ref_b  = Button(text="↺", font_size=dp(14),
-                            size_hint_x=None, width=dp(36),
-                            background_normal="", background_color=CARD, color=ACCENT2)
+            play_b = MDIconButton(
+                icon="play",
+                theme_icon_color="Custom", icon_color=GREEN,
+                size_hint_x=None,
+            )
+            stop_b = MDIconButton(
+                icon="stop",
+                theme_icon_color="Custom", icon_color=ACCENT,
+                size_hint_x=None,
+            )
+            ref_b = MDIconButton(
+                icon="refresh",
+                theme_icon_color="Custom", icon_color=ACCENT2,
+                size_hint_x=None,
+            )
             _key = svc_key
             play_b.bind(on_press=lambda *_, k=_key: self._svc_action(k, 'start'))
             stop_b.bind(on_press=lambda *_, k=_key: self._svc_action(k, 'stop'))
@@ -2969,23 +3081,27 @@ class SettingsScreen(Screen):
             inner.add_widget(row)
             self._svc_rows[svc_key] = {'status_lbl': status_lbl}
 
-        refresh_all_btn = Button(text="↺  Refresh All", font_size=dp(11),
-                                 size_hint_y=None, height=dp(36),
-                                 background_normal="", background_color=CARD,
-                                 color=ACCENT2)
+        refresh_all_btn = MDRaisedButton(
+            text="Refresh All",
+            md_bg_color=CARD,
+            theme_text_color="Custom", text_color=ACCENT2,
+            size_hint_y=None, height=dp(40),
+        )
         refresh_all_btn.bind(on_press=lambda *_: self._refresh_svc_status())
         inner.add_widget(refresh_all_btn)
 
-        self._svc_status_lbl = Label(
-            text="", font_size=dp(10), color=SUBTEXT,
+        self._svc_status_lbl = MDLabel(
+            text="", font_size=dp(10), theme_text_color="Custom", text_color=SUBTEXT,
             size_hint_y=None, height=dp(24), halign='left', valign='middle')
         self._svc_status_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
         inner.add_widget(self._svc_status_lbl)
 
-        save_btn = Button(text="Save & Connect",
-                          size_hint_y=None, height=dp(48),
-                          background_normal="", background_color=ACCENT2,
-                          color=TEXT, font_size=dp(14), bold=True)
+        save_btn = MDRaisedButton(
+            text="Save & Connect",
+            md_bg_color=ACCENT2,
+            theme_text_color="Custom", text_color=TEXT,
+            size_hint_y=None, height=dp(52),
+        )
         save_btn.bind(on_press=self._save)
         inner.add_widget(save_btn)
 
@@ -3014,8 +3130,8 @@ class SettingsScreen(Screen):
 
     def set_status(self, msg, color=GOLD):
         if self._status_lbl:
-            self._status_lbl.text  = msg
-            self._status_lbl.color = color
+            self._status_lbl.text       = msg
+            self._status_lbl.text_color = color
 
     def _make_syno_client(self):
         plex_url = Settings.get('plex_url', '')
@@ -3029,39 +3145,39 @@ class SettingsScreen(Screen):
 
     def _set_svc_status(self, key, text, color):
         if key in self._svc_rows:
-            self._svc_rows[key]['status_lbl'].text  = text
-            self._svc_rows[key]['status_lbl'].color = color
+            self._svc_rows[key]['status_lbl'].text       = text
+            self._svc_rows[key]['status_lbl'].text_color = color
 
     def _svc_action(self, key, action):
         client, err = self._make_syno_client()
         if not client:
             self._svc_status_lbl.text  = err
-            self._svc_status_lbl.color = ACCENT
+            self._svc_status_lbl.text_color = ACCENT
             return
-        self._set_svc_status(key, f"● {action}ing…", GOLD)
+        self._set_svc_status(key, f"• {action}ing…", GOLD)
 
         def on_done(result):
             success = result.get('success', False)
             if success:
-                self._set_svc_status(key, '● running' if action == 'start' else '● stopped',
+                self._set_svc_status(key, '• running' if action == 'start' else '• stopped',
                                     GREEN if action == 'start' else SUBTEXT)
             else:
                 code = result.get('error', {}).get('code', '?')
                 if code == 2104:
-                    self._set_svc_status(key, '● build failed', ACCENT)
+                    self._set_svc_status(key, '• build failed', ACCENT)
                     Clock.schedule_once(lambda dt: setattr(
                         self._svc_status_lbl, 'text',
                         'Fix in DSM → Container Manager → Project'), 0)
                     Clock.schedule_once(lambda dt: setattr(
-                        self._svc_status_lbl, 'color', GOLD), 0)
+                        self._svc_status_lbl, 'text_color', GOLD), 0)
                 else:
-                    self._set_svc_status(key, f'● error {code}', ACCENT)
+                    self._set_svc_status(key, f'• error {code}', ACCENT)
 
         def on_error(e):
-            msg = "● timed out" if 'timed out' in str(e).lower() or 'timeout' in str(e).lower() else "● error"
+            msg = "• timed out" if 'timed out' in str(e).lower() or 'timeout' in str(e).lower() else "• error"
             self._set_svc_status(key, msg, ACCENT)
             self._svc_status_lbl.text  = f"{key}: {e}"
-            self._svc_status_lbl.color = ACCENT
+            self._svc_status_lbl.text_color = ACCENT
 
         if key == 'plex':
             fn = client.plex_start if action == 'start' else client.plex_stop
@@ -3080,20 +3196,20 @@ class SettingsScreen(Screen):
         client, err = self._make_syno_client()
         if not client:
             self._svc_status_lbl.text  = err
-            self._svc_status_lbl.color = ACCENT
+            self._svc_status_lbl.text_color = ACCENT
             return
         for key in ('plex', 'qbit_proj', 'arr_proj'):
-            self._set_svc_status(key, "● checking…", GOLD)
+            self._set_svc_status(key, "• checking…", GOLD)
 
         def check_all():
             try:
                 status = client.plex_status()
                 color  = GREEN if 'running' in status.lower() else SUBTEXT
                 Clock.schedule_once(lambda dt, s=status, c=color:
-                    self._set_svc_status('plex', f"● {s}", c), 0)
+                    self._set_svc_status('plex', f"• {s}", c), 0)
             except Exception:
                 Clock.schedule_once(lambda dt:
-                    self._set_svc_status('plex', '● unreachable', ACCENT), 0)
+                    self._set_svc_status('plex', '• unreachable', ACCENT), 0)
 
             projects  = client._list_projects()
             nas_ip    = client._nas_ip
@@ -3109,13 +3225,13 @@ class SettingsScreen(Screen):
                     short  = status if len(status) <= 18 else status[:18] + '…'
                     Clock.schedule_once(
                         lambda dt, k=key, s=short, c=color:
-                            self._set_svc_status(k, f"● {s}", c), 0)
+                            self._set_svc_status(k, f"• {s}", c), 0)
                 except Exception as e:
                     Clock.schedule_once(
                         lambda dt, k=key, e=str(e): (
-                            self._set_svc_status(k, '● error', ACCENT),
+                            self._set_svc_status(k, '• error', ACCENT),
                             setattr(self._svc_status_lbl, 'text', f"{k}: {e}"),
-                            setattr(self._svc_status_lbl, 'color', ACCENT)), 0)
+                            setattr(self._svc_status_lbl, 'text_color', ACCENT)), 0)
 
         threading.Thread(target=check_all, daemon=True).start()
 
@@ -3123,9 +3239,9 @@ class SettingsScreen(Screen):
         client, err = self._make_syno_client()
         if not client:
             self._svc_status_lbl.text  = err
-            self._svc_status_lbl.color = ACCENT
+            self._svc_status_lbl.text_color = ACCENT
             return
-        self._set_svc_status(key, "● checking…", GOLD)
+        self._set_svc_status(key, "• checking…", GOLD)
 
         def check_one():
             try:
@@ -3133,7 +3249,7 @@ class SettingsScreen(Screen):
                     status = client.plex_status()
                     color  = GREEN if 'running' in status.lower() else SUBTEXT
                     Clock.schedule_once(lambda dt, s=status, c=color:
-                        self._set_svc_status('plex', f"● {s}", c), 0)
+                        self._set_svc_status('plex', f"• {s}", c), 0)
                 else:
                     proj_name = (Settings.get('qbit_project') or 'qbittorrent-gluetun') \
                                 if key == 'qbit_proj' else \
@@ -3145,10 +3261,10 @@ class SettingsScreen(Screen):
                                GOLD  if status.startswith('partial') else SUBTEXT)
                     short    = status if len(status) <= 18 else status[:18] + '…'
                     Clock.schedule_once(lambda dt, k=key, s=short, c=color:
-                        self._set_svc_status(k, f"● {s}", c), 0)
+                        self._set_svc_status(k, f"• {s}", c), 0)
             except Exception as e:
                 Clock.schedule_once(lambda dt, k=key:
-                    self._set_svc_status(k, '● error', ACCENT), 0)
+                    self._set_svc_status(k, '• error', ACCENT), 0)
 
         threading.Thread(target=check_one, daemon=True).start()
 
@@ -3200,7 +3316,7 @@ class SettingsScreen(Screen):
 
 
 # ── Welcome / Sign-In Screen ──────────────────────────────────────────────────
-class WelcomeScreen(Screen):
+class WelcomeScreen(MDScreen):
     def __init__(self, on_connect=None, **kwargs):
         super().__init__(**kwargs)
         self._on_connect = on_connect
@@ -3208,23 +3324,21 @@ class WelcomeScreen(Screen):
         self._build_ui()
 
     def _build_ui(self):
-        root = BoxLayout(orientation='vertical', padding=dp(24), spacing=dp(10))
-        with root.canvas.before:
-            Color(*BG)
-            Rectangle(pos=root.pos, size=root.size)
+        root = BoxLayout(orientation='vertical', padding=dp(24), spacing=dp(12))
 
         root.add_widget(Widget(size_hint_y=0.08))
 
-        title = Label(text="[b]CineQueue[/b]", markup=True,
-                      font_size=dp(34), color=ACCENT,
-                      size_hint_y=None, height=dp(50),
-                      halign='center', valign='middle')
+        title = MDLabel(text="[b]CineQueue[/b]", markup=True,
+                        font_size=dp(34),
+                        theme_text_color="Custom", text_color=ACCENT,
+                        size_hint_y=None, height=dp(50),
+                        halign='center', valign='middle')
         title.bind(size=lambda w, s: setattr(w, 'text_size', s))
         root.add_widget(title)
 
-        sub = Label(
+        sub = MDLabel(
             text="Your personal movie queue\nPowered by Plex + Letterboxd",
-            font_size=dp(13), color=SUBTEXT,
+            font_size=dp(13), theme_text_color="Custom", text_color=SUBTEXT,
             halign='center', valign='middle',
             size_hint_y=None, height=dp(44))
         sub.bind(size=lambda w, s: setattr(w, 'text_size', s))
@@ -3233,39 +3347,47 @@ class WelcomeScreen(Screen):
         root.add_widget(Widget(size_hint_y=0.04))
 
         fields = [
-            ("plex_url",    "Plex Server URL",   "http://192.168.1.100:32400", False),
-            ("plex_token",  "Plex Token",         "xxxxxxxxxxxxxxxx",           True),
-            ("lb_username", "Letterboxd Username","@yourusername",              False),
+            ("plex_url",    "Plex Server URL",    "http://192.168.1.100:32400", False),
+            ("plex_token",  "Plex Token",          "xxxxxxxxxxxxxxxx",           True),
+            ("lb_username", "Letterboxd Username", "@yourusername",              False),
         ]
         for key, label, hint, is_pass in fields:
-            lbl = Label(text=label, font_size=dp(11), color=SUBTEXT,
-                        size_hint_y=None, height=dp(18),
-                        halign='left', valign='middle')
-            lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
-            inp = TextInput(hint_text=hint, password=is_pass,
-                            size_hint_y=None, height=dp(42),
-                            font_size=dp(12),
-                            background_color=CARD, foreground_color=TEXT,
-                            cursor_color=ACCENT, multiline=False,
-                            padding=[dp(8), dp(10)])
+            inp = MDTextField(
+                hint_text=label,
+                helper_text=hint,
+                helper_text_mode="on_focus",
+                password=is_pass,
+                mode="rectangle",
+                size_hint_y=None,
+                height=dp(56),
+                line_color_normal=(*SUBTEXT[:3], 0.5),
+                line_color_focus=ACCENT,
+                hint_text_color_normal=SUBTEXT,
+                text_color_normal=TEXT,
+            )
             self._inputs[key] = inp
-            root.add_widget(lbl)
             root.add_widget(inp)
 
-        self._status_lbl = Label(text="", font_size=dp(10), color=ACCENT,
-                                  size_hint_y=None, height=dp(20),
-                                  halign='center', valign='middle')
+        self._status_lbl = MDLabel(text="", font_size=dp(10),
+                                    theme_text_color="Custom", text_color=ACCENT,
+                                    size_hint_y=None, height=dp(20),
+                                    halign='center', valign='middle')
         self._status_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
         root.add_widget(self._status_lbl)
 
-        connect_btn = Button(
-            text="Connect", font_size=dp(14), bold=True,
-            size_hint_y=None, height=dp(50),
-            background_normal="", background_color=ACCENT2, color=TEXT)
-        skip_btn = Button(
-            text="Skip — use demo data", font_size=dp(12),
-            size_hint_y=None, height=dp(38),
-            background_normal="", background_color=CARD, color=SUBTEXT)
+        connect_btn = MDRaisedButton(
+            text="Connect",
+            md_bg_color=ACCENT2,
+            theme_text_color="Custom", text_color=TEXT,
+            size_hint_y=None, height=dp(52),
+            size_hint_x=1,
+        )
+        skip_btn = MDFlatButton(
+            text="Skip — use demo data",
+            theme_text_color="Custom", text_color=SUBTEXT,
+            size_hint_y=None, height=dp(40),
+            size_hint_x=1,
+        )
         connect_btn.bind(on_press=self._connect)
         skip_btn.bind(on_press=lambda *_: self._on_connect and self._on_connect(skip=True))
 
@@ -3366,10 +3488,16 @@ class _BackgroundSyncer:
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
-class CineQueueApp(App):
+class CineQueueApp(MDApp):
     _REFRESH_INTERVAL = 120  # seconds between background syncs
 
     def build(self):
+        # ── Theme — must be configured BEFORE any KivyMD widget is created ───
+        self.theme_cls.theme_style   = "Dark"
+        self.theme_cls.primary_palette = "Red"
+        self.theme_cls.accent_palette  = "Blue"
+        self.theme_cls.material_style  = "M3"
+
         Window.clearcolor = BG
 
         font_path = resource_find('NotoEmoji-Regular.ttf') or 'NotoEmoji-Regular.ttf'
@@ -3378,34 +3506,22 @@ class CineQueueApp(App):
         Settings.load()
         DownloadQueue.load()
 
-        self._sm              = ScreenManager(transition=SlideTransition())
         self._settings_screen = SettingsScreen(name='settings')
         self._watch_screen    = WatchScreen(name='watch')
+        self._downloads_screen = DownloadsScreen(name='downloads')
         self._refresh_timer   = None
+        self._prev_tab        = None
+
+        # Root switches between _pre_sm (welcome/loading) and _nav (main tabs)
+        self._root = BoxLayout(orientation='vertical')
+
+        # Pre-auth ScreenManager (Welcome / Loading — no bottom nav)
+        self._pre_sm = ScreenManager(transition=SlideTransition())
+        self._root.add_widget(self._pre_sm)
 
         has_creds = bool(Settings.get('plex_url') or Settings.get('lb_username'))
 
-        # Add main screens
-        for s in [self._watch_screen,
-                  RecommendScreen(name='recommend'),
-                  AnalyticsScreen(name='analytics'),
-                  DownloadsScreen(name='downloads'),
-                  self._settings_screen]:
-            self._sm.add_widget(s)
-
-        self._nav = NavBar(manager=self._sm)
-        self._nav.size_hint_y = None
-        self._nav.height      = dp(0)  # hidden until ready
-
-        root = BoxLayout(orientation='vertical')
-        root.add_widget(self._sm)
-        root.add_widget(self._nav)
-
         if has_creds:
-            # Always route through LoadingScreen as a buffer.
-            # Load device cache immediately into globals so data is ready the moment
-            # the app transitions to watch. LoadingScreen then does an incremental
-            # sync — only fetches from Plex/LB/TMDB for movies not already in cache.
             cached_plex, cached_lb, cached_stats = MovieCache.load()
             if cached_plex or cached_lb:
                 global _plex_movies, _lb_movies, _lb_stats
@@ -3415,8 +3531,8 @@ class CineQueueApp(App):
                 _find_intersection(_plex_movies, _lb_movies)
 
             loading = LoadingScreen(name='loading', on_ready=self._on_load_done)
-            self._sm.add_widget(loading)
-            self._sm.current = 'loading'
+            self._pre_sm.add_widget(loading)
+            self._pre_sm.current = 'loading'
             plex_url   = Settings.get('plex_url')
             plex_token = Settings.get('plex_token')
             lb_user    = Settings.get('lb_username')
@@ -3427,15 +3543,53 @@ class CineQueueApp(App):
                     cached_plex=cached_plex, cached_lb=cached_lb), 0.3)
         else:
             welcome = WelcomeScreen(name='welcome', on_connect=self._on_welcome_done)
-            self._sm.add_widget(welcome)
-            self._sm.current = 'welcome'
+            self._pre_sm.add_widget(welcome)
+            self._pre_sm.current = 'welcome'
 
-        return root
+        return self._root
+
+    def _launch_main(self):
+        """Swap pre_sm out of root and insert MDBottomNavigation."""
+        nav = MDBottomNavigation()
+        nav.md_bg_color = (0.10, 0.10, 0.14, 1)
+        self._nav = nav
+
+        tab_defs = [
+            ('watch',     'Watch',     'television-play', self._watch_screen),
+            ('recommend', 'Suggest',   'cards',           RecommendScreen(name='recommend')),
+            ('analytics', 'Stats',     'chart-bar',       AnalyticsScreen(name='analytics')),
+            ('downloads', 'Downloads', 'download',        self._downloads_screen),
+            ('settings',  'Settings',  'cog',             self._settings_screen),
+        ]
+        self._tab_screens = {}
+        for tab_name, tab_text, tab_icon, screen in tab_defs:
+            item = MDBottomNavigationItem(
+                name=tab_name,
+                text=tab_text,
+                icon=tab_icon,
+            )
+            item.add_widget(screen)
+            nav.add_widget(item)
+            self._tab_screens[tab_name] = screen
+
+        nav.bind(on_switch_tabs=self._relay_lifecycle)
+
+        self._root.clear_widgets()
+        self._root.add_widget(nav)
+
+    def _relay_lifecycle(self, nav, tab, *args):
+        """Forward on_enter / on_leave to screens when tabs switch."""
+        if self._prev_tab:
+            screen = self._tab_screens.get(self._prev_tab.name)
+            if screen and hasattr(screen, 'on_leave'):
+                screen.on_leave()
+        screen = self._tab_screens.get(tab.name)
+        if screen and hasattr(screen, 'on_enter'):
+            screen.on_enter()
+        self._prev_tab = tab
 
     def _on_load_done(self):
-        self._sm.current = 'watch'
-        self._nav.height = dp(56)
-        # Periodic background sync — only triggers _notify_refresh if new movies found
+        self._launch_main()
         self._start_refresh_timer()
 
     def _start_refresh_timer(self):
@@ -3452,8 +3606,6 @@ class CineQueueApp(App):
         tmdb_key   = Settings.get('tmdb_key')
         if not (plex_url or lb_user):
             return
-        #print("[App] Background sync starting…")
-        # Reuse the LoadingScreen logic but silently (no visible loading screen)
         syncer = _BackgroundSyncer(
             plex_url, plex_token, lb_user, tmdb_key,
             cached_plex=list(_plex_movies),
@@ -3469,19 +3621,18 @@ class CineQueueApp(App):
 
     def _on_welcome_done(self, skip=False):
         if skip:
-            self._sm.current = 'watch'
-            self._nav.height = dp(56)
+            self._launch_main()
             return
         # After welcome: use loading screen to preload
         plex_url   = Settings.get('plex_url')
         plex_token = Settings.get('plex_token')
         lb_user    = Settings.get('lb_username')
         tmdb_key   = Settings.get('tmdb_key')
-        if 'loading' not in [s.name for s in self._sm.screens]:
+        if 'loading' not in [s.name for s in self._pre_sm.screens]:
             loading = LoadingScreen(name='loading', on_ready=self._on_load_done)
-            self._sm.add_widget(loading)
-        self._sm.current = 'loading'
-        loading = self._sm.get_screen('loading')
+            self._pre_sm.add_widget(loading)
+        self._pre_sm.current = 'loading'
+        loading = self._pre_sm.get_screen('loading')
         Clock.schedule_once(
             lambda dt: loading.start(plex_url, plex_token, lb_user, tmdb_key), 0.2)
 
