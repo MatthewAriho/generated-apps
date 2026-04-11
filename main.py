@@ -1678,7 +1678,6 @@ class NavBar(BoxLayout):
 
 
 class PosterWidget(FloatLayout):
-    """AsyncImage if poster_url, otherwise colored placeholder."""
     def __init__(self, movie, h=dp(160), **kwargs):
         super().__init__(size_hint_y=None, height=h, **kwargs)
         with self.canvas.before:
@@ -1688,16 +1687,25 @@ class PosterWidget(FloatLayout):
 
         url = movie.get('poster_url')
         if url:
-            self.add_widget(AsyncImage(source=url, allow_stretch=True,
-                                       keep_ratio=False, size_hint=(1, 1)))
+            self.add_widget(AsyncImage(
+                source=url,
+                allow_stretch=True,
+                keep_ratio=True,
+                fit_mode='fill',
+                size_hint=(1, 1),
+                pos_hint={'x': 0, 'y': 0}
+            ))
         else:
             cc     = movie.get('country', '?')
             rating = movie.get('rating', 0)
             text   = f"{cc}\n{E('⭐')} {rating:.1f}" if rating else cc
-            self.add_widget(Label(text=text, markup=True, font_size=dp(18),
-                                  bold=True, color=TEXT,
-                                  halign='center', valign='middle',
-                                  size_hint=(1, 1)))
+            self.add_widget(Label(
+                text=text, markup=True, font_size=dp(18),
+                bold=True, color=TEXT,
+                halign='center', valign='middle',
+                size_hint=(1, 1),
+                pos_hint={'x': 0, 'y': 0}
+            ))
 
     def _upd(self, *_):
         self._bg.pos  = self.pos
