@@ -148,6 +148,83 @@ KV = """
                     adaptive_height: True
                     halign: "center"
 
+            # ── Plaid Integration ────────────────────────────────────
+            MDLabel:
+                text: "PLAID INTEGRATION"
+                font_style: "Overline"
+                theme_text_color: "Secondary"
+                adaptive_height: True
+                padding: [dp(4), dp(16), 0, dp(4)]
+
+            MDCard:
+                orientation: 'vertical'
+                padding: [dp(16), dp(12)]
+                size_hint_y: None
+                height: self.minimum_height
+                radius: [dp(10)]
+                spacing: dp(10)
+
+                MDLabel:
+                    text: "Connect real bank accounts via Plaid. Get sandbox keys at dashboard.plaid.com."
+                    font_style: "Caption"
+                    theme_text_color: "Secondary"
+                    adaptive_height: True
+
+                MDTextField:
+                    id: plaid_client_id_field
+                    hint_text: "Client ID"
+                    mode: "rectangle"
+                    size_hint_y: None
+                    height: dp(56)
+                    text: root.saved_plaid_client_id
+
+                MDTextField:
+                    id: plaid_secret_field
+                    hint_text: "Secret"
+                    mode: "rectangle"
+                    password: True
+                    size_hint_y: None
+                    height: dp(56)
+                    text: root.saved_plaid_secret
+
+                MDBoxLayout:
+                    size_hint_y: None
+                    height: dp(36)
+                    spacing: dp(4)
+
+                    MDLabel:
+                        text: "Environment:"
+                        font_style: "Caption"
+                        adaptive_height: True
+
+                    MDRaisedButton:
+                        id: plaid_env_btn
+                        text: root.saved_plaid_env.upper()
+                        size_hint_x: None
+                        width: dp(120)
+                        size_hint_y: None
+                        height: dp(36)
+                        font_size: "11sp"
+                        on_release: root.cycle_plaid_env()
+                        md_bg_color: app.theme_cls.primary_dark
+                        elevation: 0
+
+                MDRaisedButton:
+                    text: "SAVE PLAID CREDENTIALS"
+                    size_hint_y: None
+                    height: dp(42)
+                    on_release: root.save_plaid_credentials()
+                    md_bg_color: app.theme_cls.primary_color
+                    elevation: 0
+
+                MDLabel:
+                    id: plaid_status_label
+                    text: root.plaid_status_text
+                    font_style: "Caption"
+                    theme_text_color: "Secondary"
+                    adaptive_height: True
+                    halign: "center"
+
             # ── Security ─────────────────────────────────────────────
             MDLabel:
                 text: "SECURITY"
@@ -298,6 +375,10 @@ class SettingsTab(MDBoxLayout):
     sync_status_text   = StringProperty("No backup yet this session.")
     saved_api_key      = StringProperty("")
     saved_bin_id       = StringProperty("")
+    saved_plaid_client_id = StringProperty("")
+    saved_plaid_secret    = StringProperty("")
+    saved_plaid_env       = StringProperty("sandbox")
+    plaid_status_text     = StringProperty("Not configured.")
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -311,6 +392,13 @@ class SettingsTab(MDBoxLayout):
             data = store.get("cloud")
             self.saved_api_key = data.get("api_key", "")
             self.saved_bin_id  = data.get("bin_id", "")
+        if store.exists("plaid"):
+            data = store.get("plaid")
+            self.saved_plaid_client_id = data.get("client_id", "")
+            self.saved_plaid_secret    = data.get("secret", "")
+            self.saved_plaid_env       = data.get("environment", "sandbox")
+            if self.saved_plaid_client_id:
+                self.plaid_status_text = f"Configured ({self.saved_plaid_env})"
 
     def _update_connectivity(self, *_):
         app = self._get_app()
@@ -411,6 +499,28 @@ class SettingsTab(MDBoxLayout):
         if app:
             app.root.transition.direction = "left"
             app.root.current = "pin_auth"
+
+    # ---------------------------------------------------------------- plaid credentials
+    def save_plaid_credentials(self):
+        client_id = self.ids.plaid_client_id_field.text.strip()
+        secret = self.ids.plaid_secret_field.text.strip()
+        env = self.saved_plaid_env
+
+        if not client_id or not secret:
+            Snackbar(text="Enter both Client ID and Secret.").open()
+            return
+
+        store = self._get_store()
+        store.put("plaid", client_id=client_id, secret=secret, environment=env)
+        self.saved_plaid_client_id = client_id
+        self.saved_plaid_secret = secret
+        self.plaid_status_text = f"Saved ({env})"
+        Snackbar(text="Plaid credentials saved.").open()
+
+    def cycle_plaid_env(self):
+        envs = ["sandbox", "development", "production"]
+        idx = envs.index(self.saved_plaid_env) if self.saved_plaid_env in envs else 0
+        self.saved_plaid_env = envs[(idx + 1) % len(envs)]
 
     # ---------------------------------------------------------------- demo mode
     def load_demo(self):

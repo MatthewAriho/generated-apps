@@ -20,7 +20,11 @@ KV = """
     MDTopAppBar:
         title: "Bank Accounts"
         elevation: 2
-        right_action_items: [["plus", lambda x: root.show_bank_selector(), "Add bank"]]
+        right_action_items:
+            [ \
+              ["test-tube", lambda x: root.sandbox_test_connect(), "Sandbox test"], \
+              ["plus", lambda x: root.show_bank_selector(), "Add bank"] \
+            ]
 
     ScrollView:
         do_scroll_x: False
@@ -139,22 +143,22 @@ class BankConnectTab(MDBoxLayout):
 
     # ---------------------------------------------------------------- bank selector
     def show_bank_selector(self):
-        scotiabank_btn = MDRaisedButton(
+        plaid_btn = MDRaisedButton(
+            text="Plaid",
+            size_hint_x=None,
+            width=dp(100),
+            on_release=lambda *_: self._close_and(self._start_plaid_link),
+        )
+        scotiabank_btn = MDFlatButton(
             text="Scotiabank",
             size_hint_x=None,
-            width=dp(120),
+            width=dp(100),
             on_release=lambda *_: self._close_and(self._show_scotiabank_login),
-        )
-        other_btn = MDFlatButton(
-            text="Other Bank",
-            size_hint_x=None,
-            width=dp(120),
-            on_release=lambda *_: self._close_and(self._show_generic_login),
         )
         self._dialog = MDDialog(
             title="Connect Bank Account",
-            text="Choose your financial institution.\nTap outside to cancel.",
-            buttons=[other_btn, scotiabank_btn],
+            text="Use Plaid for real banks.\nScotiabank uses mock data.",
+            buttons=[scotiabank_btn, plaid_btn],
         )
         self._dialog.open()
 
@@ -203,22 +207,144 @@ class BankConnectTab(MDBoxLayout):
         )
         self._dialog.open()
 
-    # ---------------------------------------------------------------- generic login
-    def _show_generic_login(self):
-        info = MDLabel(
-            text="Generic bank integration uses Flinks/Plaid API.\n"
-                 "Enter your Flinks API key in Settings to enable this feature.",
-            theme_text_color="Secondary",
-            adaptive_height=True,
-        )
-        self._dialog = MDDialog(
-            title="Other Bank",
-            type="custom",
-            content_cls=info,
-            buttons=[MDFlatButton(text="OK",
-                                  on_release=lambda *_: self._dialog.dismiss())],
-        )
-        self._dialog.open()
+    # ---------------------------------------------------------------- plaid link
+    def _get_plaid_credentials(self) -> dict | None:
+        """Load Plaid credentials from JsonStore. Returns None if not configured."""
+        from kivy.storage.jsonstore import JsonStore
+        import os
+        from kivy.utils import platform as kp
+        if kp == "android":
+            try:
+                from android.storage import app_storage_path
+                base = app_storage_path()
+            except Exception:
+                base = os.path.expanduser("~")
+        else:
+            base = os.path.join(os.path.expanduser("~"), ".clearspend")
+        os.makedirs(base, exist_ok=True)
+        store = JsonStore(os.path.join(base, "settings.json"))
+        if store.exists("plaid"):
+            data = store.get("plaid")
+            cid = data.get("client_id", "")
+            sec = data.get("secret", "")
+            if cid and sec:
+                return {
+                    "client_id": cid,
+                    "secret": sec,
+                    "environment": data.get("environment", "sandbox"),
+                }
+        return None
+
+    def _start_plaid_link(self):
+        """Create a Link token and open Plaid Link in the device browser."""
+        creds = self._get_plaid_credentials()
+        if not creds:
+            Snackbar(text="Configure Plaid credentials in Settings first.").open()
+            return
+
+        Snackbar(text="Preparing bank login...").open()
+
+        def _do(*_):
+            try:
+                from utils.bank_api import PlaidAPI
+                api = PlaidAPI(**creds)
+                resp = api.create_link_token(
+                    redirect_uri=PlaidAPI.REDIRECT_URI,
+                )
+                link_token = resp.get("link_token", "")
+                if not link_token:
+                    Snackbar(text="Failed to create link token.").open()
+                    return
+
+                url = api.get_link_url(link_token)
+                self._open_browser(url)
+                Snackbar(text="Opening bank login in browser...").open()
+            except Exception as e:
+                Snackbar(text=f"Plaid error: {e}").open()
+
+        Clock.schedule_once(_do, 0.3)
+
+    def _open_browser(self, url: str):
+        """Open a URL in the device browser."""
+        from kivy.utils import platform as kp
+        if kp == "android":
+            try:
+                from jnius import autoclass
+                Intent = autoclass("android.content.Intent")
+                Uri = autoclass("android.net.Uri")
+                PythonActivity = autoclass("org.kivy.android.PythonActivity")
+                intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                PythonActivity.mActivity.startActivity(intent)
+            except Exception:
+                import webbrowser
+                webbrowser.open(url)
+        else:
+            import webbrowser
+            webbrowser.open(url)
+
+    def _handle_plaid_callback(self, public_token: str):
+        """Called when the app receives a Plaid redirect with a public_token."""
+        creds = self._get_plaid_credentials()
+        if not creds:
+            Snackbar(text="Plaid credentials missing.").open()
+            return
+
+        Snackbar(text="Connecting bank account...").open()
+
+        def _do(*_):
+            try:
+                from utils.bank_api import PlaidAPI
+                from models.database import Database
+                api = PlaidAPI(**creds)
+                result = api.connect(public_token=public_token)
+
+                if result.get("success"):
+                    db = Database.get()
+                    access_token = result.get("access_token", "")
+                    item_id = result.get("item_id", "")
+                    for acc in result.get("accounts", []):
+                        db.add_bank_account(
+                            bank_name="Plaid",
+                            account_name=acc.get("name", "Account"),
+                            account_number_masked=acc.get("number", "****"),
+                            access_token=access_token,
+                            item_id=item_id,
+                            environment=creds.get("environment", "sandbox"),
+                        )
+                    Snackbar(text="Bank connected via Plaid!").open()
+                    self.refresh()
+                else:
+                    Snackbar(text=f"Connection failed: {result.get('error','')}").open()
+            except Exception as e:
+                Snackbar(text=f"Plaid error: {e}").open()
+
+        Clock.schedule_once(_do, 0.3)
+
+    def sandbox_test_connect(self):
+        """Sandbox shortcut: skip browser, create test token directly."""
+        creds = self._get_plaid_credentials()
+        if not creds:
+            Snackbar(text="Configure Plaid credentials in Settings first.").open()
+            return
+        if creds.get("environment") != "sandbox":
+            Snackbar(text="Sandbox test only works in sandbox environment.").open()
+            return
+
+        Snackbar(text="Creating sandbox connection...").open()
+
+        def _do(*_):
+            try:
+                from utils.bank_api import PlaidAPI
+                api = PlaidAPI(**creds)
+                public_token = api.create_sandbox_token()
+                if public_token:
+                    self._handle_plaid_callback(public_token)
+                else:
+                    Snackbar(text="Failed to create sandbox token.").open()
+            except Exception as e:
+                Snackbar(text=f"Sandbox error: {e}").open()
+
+        Clock.schedule_once(_do, 0.3)
 
     # ---------------------------------------------------------------- mock OAuth
     def _mock_oauth_connect(self, bank_name: str, username: str, password: str):
@@ -248,7 +374,6 @@ class BankConnectTab(MDBoxLayout):
 
     # ---------------------------------------------------------------- sync
     def sync_account(self, account_id: int):
-        from utils.bank_api import get_bank_api
         from models.database import Database
 
         db = Database.get()
@@ -259,33 +384,62 @@ class BankConnectTab(MDBoxLayout):
 
         Snackbar(text="Fetching transactions...").open()
 
-        def _do(*_):
-            api = get_bank_api(acc["bank_name"])
-            api.connect()  # re-auth mock
-            txns = api.get_transactions(from_date=acc.get("last_sync", "")[:10])
+        if acc.get("bank_name") == "Plaid":
+            Clock.schedule_once(lambda *_: self._sync_plaid(acc, account_id), 0.3)
+        else:
+            Clock.schedule_once(lambda *_: self._sync_mock(acc, account_id), 0.5)
+
+    def _sync_plaid(self, acc: dict, account_id: int):
+        """Sync transactions for a Plaid-connected account using /transactions/sync."""
+        try:
+            from utils.bank_api import PlaidAPI
+            from models.database import Database
+
+            creds = self._get_plaid_credentials()
+            if not creds:
+                Snackbar(text="Plaid credentials missing. Check Settings.").open()
+                return
+
+            db = Database.get()
+            api = PlaidAPI(**creds)
+            cursor = db.get_plaid_cursor(account_id)
+            access_token = acc.get("access_token", "")
+
+            result = api.get_transactions(
+                access_token=access_token,
+                cursor=cursor,
+            )
+
             added = 0
-            for t in txns:
-                existing = db.get_transactions(
-                    year_month=t["date"][:7],
+            for t in result.get("added", []):
+                ptid = t.get("plaid_transaction_id", "")
+                if ptid:
+                    existing = db.conn.execute(
+                        "SELECT id FROM transactions WHERE plaid_transaction_id = ?",
+                        (ptid,),
+                    ).fetchone()
+                    if existing:
+                        continue
+
+                db.add_transaction(
+                    amount=t["amount"],
+                    type_=t["type"],
+                    category=t.get("category", "Other"),
+                    description=t.get("description", ""),
+                    trans_date=t["date"],
+                    source="plaid",
+                    bank_account_id=account_id,
+                    plaid_transaction_id=t.get("plaid_transaction_id", ""),
                 )
-                # Basic dedup: skip if description+date+amount already exists
-                dup = any(
-                    e.get("description") == t["description"]
-                    and e.get("date") == t["date"]
-                    and abs(e.get("amount", 0) - t["amount"]) < 0.01
-                    for e in existing
-                )
-                if not dup:
-                    db.add_transaction(
-                        amount=t["amount"],
-                        type_=t["type"],
-                        category=t.get("category", "Other"),
-                        description=t.get("description", ""),
-                        trans_date=t["date"],
-                        source=t.get("source", acc["bank_name"].lower()),
-                        bank_account_id=account_id,
-                    )
-                    added += 1
+                added += 1
+
+            removed_ids = result.get("removed", [])
+            if removed_ids:
+                db.delete_transactions_by_plaid_id(removed_ids)
+
+            new_cursor = result.get("cursor", cursor)
+            if new_cursor:
+                db.set_plaid_cursor(account_id, new_cursor)
 
             db.update_bank_sync_time(account_id)
             self.refresh()
@@ -294,9 +448,53 @@ class BankConnectTab(MDBoxLayout):
             if app:
                 app.refresh_dashboard()
 
-            Snackbar(text=f"Synced {added} new transaction(s).").open()
+            removed_count = len(removed_ids)
+            msg = f"Synced {added} new"
+            if removed_count:
+                msg += f", {removed_count} removed"
+            Snackbar(text=msg + ".").open()
 
-        Clock.schedule_once(_do, 0.5)
+        except Exception as e:
+            Snackbar(text=f"Sync error: {e}").open()
+
+    def _sync_mock(self, acc: dict, account_id: int):
+        """Sync transactions for a mock (Scotiabank) account."""
+        from utils.bank_api import get_bank_api
+        from models.database import Database
+
+        db = Database.get()
+        api = get_bank_api(acc["bank_name"])
+        api.connect()
+        txns = api.get_transactions(from_date=acc.get("last_sync", "")[:10])
+        added = 0
+        for t in txns:
+            existing = db.get_transactions(year_month=t["date"][:7])
+            dup = any(
+                e.get("description") == t["description"]
+                and e.get("date") == t["date"]
+                and abs(e.get("amount", 0) - t["amount"]) < 0.01
+                for e in existing
+            )
+            if not dup:
+                db.add_transaction(
+                    amount=t["amount"],
+                    type_=t["type"],
+                    category=t.get("category", "Other"),
+                    description=t.get("description", ""),
+                    trans_date=t["date"],
+                    source=t.get("source", acc["bank_name"].lower()),
+                    bank_account_id=account_id,
+                )
+                added += 1
+
+        db.update_bank_sync_time(account_id)
+        self.refresh()
+
+        app = self._get_app()
+        if app:
+            app.refresh_dashboard()
+
+        Snackbar(text=f"Synced {added} new transaction(s).").open()
 
     @staticmethod
     def _get_app():

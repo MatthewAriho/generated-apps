@@ -157,6 +157,13 @@ android.archs = arm64-v8a
 # (bool) enables Android auto backup feature (Android API >=23)
 android.allow_backup = True
 
+# (str) Activity launch mode - singleTask ensures deep links reopen the
+# existing activity instead of creating a new one
+android.manifest.launch_mode = singleTask
+
+# (str) Path to intent filter XML for deep link handling (Plaid callback)
+android.manifest.intent_filters = intent_filters.xml
+
 # (str) An optional directory containing custom python-for-android (p4a) recipe files
 #p4a.local_recipes = %(source.dir)s/p4a-recipes
 

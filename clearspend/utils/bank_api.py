@@ -128,28 +128,228 @@ class ScotiabankAPI(BankAPI):
 
 
 # ---------------------------------------------------------------------------
-class GenericBankAPI(BankAPI):
-    """Stub for Plaid/Flinks-style integration for other Canadian banks.
+# Plaid category -> app category mapping
+_MAP_PLAID_CATEGORY = {
+    "FOOD_AND_DRINK": "Food & Dining",
+    "TRANSPORTATION": "Transportation",
+    "ENTERTAINMENT": "Entertainment",
+    "GENERAL_MERCHANDISE": "Shopping",
+    "SHOPPING": "Shopping",
+    "MEDICAL": "Healthcare",
+    "PERSONAL_CARE": "Healthcare",
+    "RENT_AND_UTILITIES": "Utilities",
+    "INCOME": "Salary / Income",
+    "TRANSFER_IN": "Salary / Income",
+    "TRANSFER_OUT": "ATM / Cash",
+    "TRAVEL": "Transportation",
+    "LOAN_PAYMENTS": "Utilities",
+    "BANK_FEES": "Other",
+    "HOME_IMPROVEMENT": "Shopping",
+    "GENERAL_SERVICES": "Other",
+    "GOVERNMENT_AND_NON_PROFIT": "Other",
+}
 
-    Supported institutions (when real keys are provided):
-    - TD Bank, RBC, BMO, CIBC, National Bank via Flinks API
-    - Any Plaid-supported institution (US/CA)
+
+class PlaidAPIError(Exception):
+    """Raised when Plaid returns an error response."""
+    def __init__(self, error_type: str, error_code: str, message: str):
+        self.error_type = error_type
+        self.error_code = error_code
+        super().__init__(f"Plaid {error_type}/{error_code}: {message}")
+
+
+class PlaidAPI(BankAPI):
+    """Plaid integration for connecting to US/CA bank accounts.
+
+    Supports sandbox, development, and production environments.
+    Uses the Plaid API v2 with /transactions/sync for incremental updates.
     """
 
-    def __init__(self, api_key: str = "", institution_id: str = ""):
-        self.api_key = api_key
-        self.institution_id = institution_id
-        self._access_token: str | None = None
+    ENVIRONMENTS = {
+        "sandbox":     "https://sandbox.plaid.com",
+        "development": "https://development.plaid.com",
+        "production":  "https://production.plaid.com",
+    }
 
+    REDIRECT_URI = "clearspend://plaid-callback"
+
+    def __init__(self, client_id: str = "", secret: str = "",
+                 environment: str = "sandbox", **_):
+        self.client_id = client_id
+        self.secret = secret
+        self.environment = environment
+        self._accounts: list[dict] = []
+
+    def _base_url(self) -> str:
+        return self.ENVIRONMENTS.get(self.environment, self.ENVIRONMENTS["sandbox"])
+
+    def _post(self, endpoint: str, payload: dict) -> dict:
+        """POST JSON to Plaid API. Returns parsed response dict."""
+        import json
+        from urllib.request import Request, urlopen
+        from urllib.error import HTTPError
+
+        url = f"{self._base_url()}{endpoint}"
+        body = json.dumps(payload).encode("utf-8")
+        req = Request(url, data=body, method="POST")
+        req.add_header("Content-Type", "application/json")
+
+        try:
+            with urlopen(req, timeout=15) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except HTTPError as e:
+            try:
+                err = json.loads(e.read().decode("utf-8"))
+                raise PlaidAPIError(
+                    err.get("error_type", "UNKNOWN"),
+                    err.get("error_code", "UNKNOWN"),
+                    err.get("error_message", str(e)),
+                )
+            except (json.JSONDecodeError, PlaidAPIError):
+                raise
+            except Exception:
+                raise PlaidAPIError("HTTP_ERROR", str(e.code), str(e))
+
+    def _auth_payload(self) -> dict:
+        """Base payload with client credentials."""
+        return {"client_id": self.client_id, "secret": self.secret}
+
+    # ---------------------------------------------------------------- Link flow
+    def create_link_token(self, user_id: str = "clearspend_user",
+                          redirect_uri: str = "") -> dict:
+        """Create a Link token for opening Plaid Link in browser."""
+        payload = {
+            **self._auth_payload(),
+            "user": {"client_user_id": user_id},
+            "client_name": "ClearSpend",
+            "products": ["transactions"],
+            "country_codes": ["US", "CA"],
+            "language": "en",
+        }
+        if redirect_uri:
+            payload["redirect_uri"] = redirect_uri
+        return self._post("/link/token/create", payload)
+
+    def exchange_public_token(self, public_token: str) -> dict:
+        """Exchange a public_token from Link for a permanent access_token."""
+        payload = {**self._auth_payload(), "public_token": public_token}
+        return self._post("/item/public_token/exchange", payload)
+
+    # ---------------------------------------------------------------- Sandbox helper
+    def create_sandbox_token(self, institution_id: str = "ins_109508") -> str:
+        """Sandbox only: create a public_token without the Link UI.
+        Default institution is First Platypus Bank (Plaid sandbox)."""
+        payload = {
+            **self._auth_payload(),
+            "institution_id": institution_id,
+            "initial_products": ["transactions"],
+        }
+        resp = self._post("/sandbox/public_token/create", payload)
+        return resp.get("public_token", "")
+
+    # ---------------------------------------------------------------- BankAPI interface
     def connect(self, public_token: str = "", **_) -> dict:
-        # TODO: exchange public_token via Flinks/Plaid API
-        return {"success": False, "error": "Generic bank API not configured yet."}
+        """Exchange public_token, fetch accounts, return normalized result."""
+        if not public_token:
+            return {"success": False, "error": "No public_token provided."}
+        try:
+            exchange = self.exchange_public_token(public_token)
+            access_token = exchange.get("access_token", "")
+            item_id = exchange.get("item_id", "")
 
-    def get_accounts(self) -> list[dict]:
-        return []
+            accounts = self.get_accounts(access_token=access_token)
+            return {
+                "success": True,
+                "accounts": accounts,
+                "access_token": access_token,
+                "item_id": item_id,
+            }
+        except PlaidAPIError as e:
+            return {"success": False, "error": str(e)}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
-    def get_transactions(self, account_id: str, from_date: str | None = None) -> list[dict]:
-        return []
+    def get_accounts(self, access_token: str = "", **_) -> list[dict]:
+        """Fetch accounts for the given access_token."""
+        payload = {**self._auth_payload(), "access_token": access_token}
+        resp = self._post("/accounts/get", payload)
+        accounts = []
+        for acc in resp.get("accounts", []):
+            mask = acc.get("mask", "****")
+            accounts.append({
+                "id": acc.get("account_id", ""),
+                "name": acc.get("name", "Account"),
+                "number": f"****{mask}" if mask else "****",
+                "balance": acc.get("balances", {}).get("current", 0.0),
+                "type": acc.get("subtype", acc.get("type", "checking")),
+                "currency": acc.get("balances", {}).get("iso_currency_code", "CAD"),
+            })
+        self._accounts = accounts
+        return accounts
+
+    def get_transactions(self, account_id: str = "", from_date: str | None = None,
+                         access_token: str = "", cursor: str = "",
+                         **_) -> dict:
+        """Fetch transactions via /transactions/sync (incremental).
+
+        Returns dict with keys: added (list[dict]), removed (list[str]),
+        cursor (str), has_more (bool).
+        """
+        all_added: list[dict] = []
+        all_removed: list[str] = []
+        current_cursor = cursor
+        has_more = True
+
+        while has_more:
+            payload = {
+                **self._auth_payload(),
+                "access_token": access_token,
+                "cursor": current_cursor,
+                "count": 100,
+            }
+            resp = self._post("/transactions/sync", payload)
+
+            for t in resp.get("added", []):
+                # Plaid: amount > 0 = debit (expense), amount < 0 = credit (income)
+                raw_amount = t.get("amount", 0)
+                tx_type = "expense" if raw_amount > 0 else "income"
+                amount = abs(raw_amount)
+
+                # Map Plaid category to app category
+                pfc = t.get("personal_finance_category", {})
+                plaid_cat = pfc.get("primary", "")
+                app_cat = _MAP_PLAID_CATEGORY.get(plaid_cat, "Other")
+
+                all_added.append({
+                    "description": (t.get("name") or t.get("merchant_name") or "")[:100],
+                    "category": app_cat,
+                    "amount": round(amount, 2),
+                    "type": tx_type,
+                    "date": t.get("date", ""),
+                    "source": "plaid",
+                    "bank_account_id": None,
+                    "plaid_transaction_id": t.get("transaction_id", ""),
+                })
+
+            for t in resp.get("removed", []):
+                tid = t.get("transaction_id", "")
+                if tid:
+                    all_removed.append(tid)
+
+            current_cursor = resp.get("next_cursor", current_cursor)
+            has_more = resp.get("has_more", False)
+
+        return {
+            "added": all_added,
+            "removed": all_removed,
+            "cursor": current_cursor,
+            "has_more": False,
+        }
+
+    def get_link_url(self, link_token: str) -> str:
+        """Build the Plaid Link URL to open in a browser."""
+        base = "https://cdn.plaid.com/link/v2/stable/link.html"
+        return f"{base}?isWebview=true&token={link_token}"
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +357,7 @@ class GenericBankAPI(BankAPI):
 def get_bank_api(bank_name: str, **kwargs) -> BankAPI:
     mapping = {
         "scotiabank": ScotiabankAPI,
-        "generic": GenericBankAPI,
+        "plaid": PlaidAPI,
     }
-    cls = mapping.get(bank_name.lower(), GenericBankAPI)
+    cls = mapping.get(bank_name.lower(), PlaidAPI)
     return cls(**kwargs)

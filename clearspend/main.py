@@ -128,7 +128,13 @@ class ClearSpendApp(MDApp):
         Clock.schedule_once(self._check_connectivity, 0.5)
         # Start spend alert checker (every 30 min)
         Clock.schedule_interval(self._check_spend_alert, 1800)
+        # Check for deep link intent on cold start
+        Clock.schedule_once(lambda *_: self._check_plaid_intent(), 1.0)
         return root
+
+    def on_resume(self):
+        """Check for Plaid deep link intent when app returns to foreground."""
+        Clock.schedule_once(lambda *_: self._check_plaid_intent(), 0.5)
 
     def _init_db(self, *_):
         from models.database import Database
@@ -248,6 +254,45 @@ class ClearSpendApp(MDApp):
     def go_to_budget(self):
         self.root.transition.direction = "left"
         self.root.current = "budget"
+
+    # ---------------------------------------------------------------- plaid deep link
+    def _check_plaid_intent(self):
+        """Check if the app was opened via clearspend://plaid-callback deep link."""
+        from kivy.utils import platform
+        if platform != "android":
+            return
+        try:
+            from jnius import autoclass
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            activity = PythonActivity.mActivity
+            intent = activity.getIntent()
+            if intent is None:
+                return
+            uri = intent.getData()
+            if uri is None:
+                return
+            scheme = str(uri.getScheme() or "")
+            host = str(uri.getHost() or "")
+            if scheme == "clearspend" and host == "plaid-callback":
+                public_token = str(uri.getQueryParameter("public_token") or "")
+                if public_token:
+                    # Clear intent data to prevent re-processing
+                    intent.setData(None)
+                    Clock.schedule_once(
+                        lambda *_: self._process_plaid_token(public_token), 0.3
+                    )
+        except Exception:
+            pass
+
+    def _process_plaid_token(self, public_token: str):
+        """Route the Plaid public_token to BankConnectTab for processing."""
+        try:
+            bank_tab = self.root.ids.bank_tab
+            bank_tab._handle_plaid_callback(public_token)
+            self.root.ids.nav.switch_tab("bank")
+        except Exception as e:
+            from kivymd.uix.snackbar import Snackbar
+            Snackbar(text=f"Plaid callback error: {e}").open()
 
     # ---------------------------------------------------------------- demo mode
     def load_demo_data(self):

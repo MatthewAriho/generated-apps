@@ -34,6 +34,7 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self._create_tables()
+        self._migrate_v2()
         self._seed_categories()
 
     # ------------------------------------------------------------------ schema
@@ -82,6 +83,28 @@ class Database:
         """)
         self.conn.commit()
 
+    def _migrate_v2(self):
+        """Add Plaid-related columns if they do not exist yet."""
+        def _has_column(table: str, column: str) -> bool:
+            cur = self.conn.execute(f"PRAGMA table_info({table})")
+            return any(row[1] == column for row in cur.fetchall())
+
+        if not _has_column("bank_accounts", "item_id"):
+            self.conn.execute("ALTER TABLE bank_accounts ADD COLUMN item_id TEXT DEFAULT ''")
+        if not _has_column("bank_accounts", "environment"):
+            self.conn.execute("ALTER TABLE bank_accounts ADD COLUMN environment TEXT DEFAULT 'sandbox'")
+        if not _has_column("transactions", "plaid_transaction_id"):
+            self.conn.execute("ALTER TABLE transactions ADD COLUMN plaid_transaction_id TEXT DEFAULT ''")
+
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS plaid_sync_cursors (
+                bank_account_id INTEGER PRIMARY KEY,
+                cursor TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (bank_account_id) REFERENCES bank_accounts(id)
+            );
+        """)
+        self.conn.commit()
+
     def _seed_categories(self):
         defaults = [
             ("Food & Dining",      "food"),
@@ -114,14 +137,17 @@ class Database:
         trans_date: str | None = None,
         source: str = "manual",
         bank_account_id: int | None = None,
+        plaid_transaction_id: str = "",
     ) -> int:
         if trans_date is None:
             trans_date = date.today().isoformat()
         cur = self.conn.execute(
             """INSERT INTO transactions
-               (amount, type, category, description, date, source, bank_account_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (amount, type_, category, description, trans_date, source, bank_account_id),
+               (amount, type, category, description, date, source,
+                bank_account_id, plaid_transaction_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (amount, type_, category, description, trans_date, source,
+             bank_account_id, plaid_transaction_id),
         )
         self.conn.commit()
         return cur.lastrowid
@@ -193,13 +219,16 @@ class Database:
         account_name: str,
         account_number_masked: str,
         access_token: str = "",
+        item_id: str = "",
+        environment: str = "sandbox",
     ) -> int:
         cur = self.conn.execute(
             """INSERT INTO bank_accounts
-               (bank_name, account_name, account_number_masked, access_token, last_sync)
-               VALUES (?, ?, ?, ?, ?)""",
+               (bank_name, account_name, account_number_masked, access_token,
+                last_sync, item_id, environment)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (bank_name, account_name, account_number_masked, access_token,
-             datetime.now().isoformat()),
+             datetime.now().isoformat(), item_id, environment),
         )
         self.conn.commit()
         return cur.lastrowid
@@ -212,6 +241,33 @@ class Database:
         self.conn.execute(
             "UPDATE bank_accounts SET last_sync = ? WHERE id = ?",
             (datetime.now().isoformat(), account_id),
+        )
+        self.conn.commit()
+
+    # --------------------------------------------------------- plaid sync cursors
+    def get_plaid_cursor(self, bank_account_id: int) -> str:
+        cur = self.conn.execute(
+            "SELECT cursor FROM plaid_sync_cursors WHERE bank_account_id = ?",
+            (bank_account_id,),
+        )
+        row = cur.fetchone()
+        return row["cursor"] if row else ""
+
+    def set_plaid_cursor(self, bank_account_id: int, cursor: str):
+        self.conn.execute(
+            "INSERT OR REPLACE INTO plaid_sync_cursors(bank_account_id, cursor) VALUES (?, ?)",
+            (bank_account_id, cursor),
+        )
+        self.conn.commit()
+
+    def delete_transactions_by_plaid_id(self, plaid_ids: list[str]):
+        """Remove transactions that Plaid reports as deleted."""
+        if not plaid_ids:
+            return
+        placeholders = ",".join("?" * len(plaid_ids))
+        self.conn.execute(
+            f"DELETE FROM transactions WHERE plaid_transaction_id IN ({placeholders})",
+            plaid_ids,
         )
         self.conn.commit()
 
