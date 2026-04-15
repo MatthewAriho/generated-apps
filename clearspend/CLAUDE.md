@@ -21,6 +21,20 @@ End of plan.
 After planning, dont wait for more input from me, start working immediately. implemennt this plan, save it in a markdown file in the workspace directory. Once done building each of the major versions highlighted, build the app and store the apk and commit the code so i can revert changes if necessary then move to the next version. Everytime you finish a major build aso update the plan.md doc and detail where you left off. make sure the plan is written in a way that is easy to hand off to another agent.
 
 
+## Design System
+
+**You MUST read and follow `../design.md` before writing any KV layout or screen code.**
+It contains the canonical patterns for layouts, ScrollViews, cards, forms, navigation,
+colors, sizing, and Android build constraints. All rules in that file are mandatory.
+
+Key rules (see design.md for full details):
+- **Never use `adaptive_height: True` on container widgets** (MDBoxLayout, MDCard, MDGridLayout). Use `size_hint_y: None` + `height: self.minimum_height` instead. Leaf widgets (MDLabel, MDIcon) may use `adaptive_height: True`.
+- Every ScrollView child must have `size_hint_y: None` + `height: self.minimum_height`.
+- Every MDTextField must have `size_hint_y: None` + `height: dp(56)`.
+- Use `mode: "rectangle"` on MDTextField (not `"outlined"`).
+- Use `app.theme_cls.primary_dark` (not `primary_dark_color`).
+- When building containers in Python, use `widget.bind(minimum_height=widget.setter('height'))`.
+
 ## Coding Rules
 
 **No unicode / special characters in Python or KV strings.**
