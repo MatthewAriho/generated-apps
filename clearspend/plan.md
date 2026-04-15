@@ -14,7 +14,7 @@ KivyMD Android budget app (renamed from BudgetApp → **ClearSpend**) built in 4
 | V0.1 | Core app, manual entry, bank connect UI, monthly tracking, local+cloud storage | DONE | `bin/clearspend-0.1-arm64-v8a-debug.apk` |
 | V1 | Recurring detection, category trend tracking | SOURCE DONE — needs APK | - |
 | V1.5 | Monthly budget, over/under calc, forecasting, saving tips | SOURCE DONE — needs APK | - |
-| V2 | Push notifications, PIN/fingerprint auth | SOURCE DONE — needs APK | - |
+| V2 | Push notifications, PIN/fingerprint auth | DONE | `bin/clearspend-0.5-arm64-v8a-debug.apk` |
 
 ---
 
@@ -169,7 +169,7 @@ git commit -m "V0.1: core app, manual entry, bank mock, cloud sync"
 - `main.py` — spend alerts via `Clock.schedule_interval` every 30 min
 - `buildozer.spec` — `androidx.biometric:biometric:1.1.0` gradle dep, `android.enable_androidx = True`, `USE_BIOMETRIC` + `USE_FINGERPRINT` permissions
 
-**Next action:** Run `echo "y" | buildozer android debug` to produce the v0.4 APK, then commit it.
+**Next action:** All planned versions complete. Consider V3 features: export to CSV/PDF, recurring budget auto-reset, multi-currency support, or app icon + splash screen polish before Play Store release.
 
 **Bugs fixed (2026-04-13/14):**
 - All screen KV strings used `app.theme_cls.primary_dark_color` which does not exist in KivyMD 1.x — the correct property is `app.theme_cls.primary_dark`. Fixed in all 5 screen files + `.buildozer/android/app` cached copies.
