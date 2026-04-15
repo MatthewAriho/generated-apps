@@ -35,13 +35,15 @@ KV = """
 
             MDBoxLayout:
                 orientation: 'vertical'
-                adaptive_height: True
+                size_hint_y: None
+                height: self.minimum_height
                 padding: [dp(12), dp(8), dp(12), dp(80)]
                 spacing: dp(10)
 
                 # ── Month navigator ──────────────────────────────────────
                 MDBoxLayout:
-                    adaptive_height: True
+                    size_hint_y: None
+                    height: self.minimum_height
                     spacing: dp(4)
 
                     MDIconButton:
@@ -85,13 +87,15 @@ KV = """
                         adaptive_height: True
 
                     MDBoxLayout:
-                        adaptive_height: True
+                        size_hint_y: None
+                        height: self.minimum_height
                         spacing: dp(24)
                         padding: [0, dp(6), 0, 0]
 
                         MDBoxLayout:
                             orientation: 'vertical'
-                            adaptive_height: True
+                            size_hint_y: None
+                            height: self.minimum_height
                             MDLabel:
                                 text: "(+) Income"
                                 theme_text_color: "Custom"
@@ -108,7 +112,8 @@ KV = """
 
                         MDBoxLayout:
                             orientation: 'vertical'
-                            adaptive_height: True
+                            size_hint_y: None
+                            height: self.minimum_height
                             MDLabel:
                                 text: "(-) Expenses"
                                 theme_text_color: "Custom"
@@ -125,7 +130,8 @@ KV = """
 
                 # ── Recent transactions header ─────────────────────────
                 MDBoxLayout:
-                    adaptive_height: True
+                    size_hint_y: None
+                    height: self.minimum_height
                     padding: [dp(4), dp(4), 0, 0]
 
                     MDLabel:
@@ -145,7 +151,8 @@ KV = """
                 MDBoxLayout:
                     id: txn_list
                     orientation: 'vertical'
-                    adaptive_height: True
+                    size_hint_y: None
+                    height: self.minimum_height
                     spacing: dp(6)
 
         MDFloatingActionButton:

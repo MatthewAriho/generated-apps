@@ -38,7 +38,8 @@ KV = """
 
             MDBoxLayout:
                 orientation: 'vertical'
-                adaptive_height: True
+                size_hint_y: None
+                height: self.minimum_height
                 padding: [dp(12), dp(10)]
                 spacing: dp(10)
 
@@ -53,7 +54,8 @@ KV = """
                 MDCard:
                     orientation: 'vertical'
                     padding: [dp(16), dp(12)]
-                    adaptive_height: True
+                    size_hint_y: None
+                    height: self.minimum_height
                     radius: [dp(12)]
                     md_bg_color: app.theme_cls.primary_dark
 
@@ -76,7 +78,8 @@ KV = """
                 MDBoxLayout:
                     id: budget_list
                     orientation: 'vertical'
-                    adaptive_height: True
+                    size_hint_y: None
+                    height: self.minimum_height
                     spacing: dp(8)
 
                 # Saving tips
@@ -90,7 +93,8 @@ KV = """
                 MDBoxLayout:
                     id: tips_box
                     orientation: 'vertical'
-                    adaptive_height: True
+                    size_hint_y: None
+                    height: self.minimum_height
                     spacing: dp(6)
 """
 

@@ -25,7 +25,8 @@ KV = """
 
         MDBoxLayout:
             orientation: 'vertical'
-            adaptive_height: True
+            size_hint_y: None
+            height: self.minimum_height
             padding: [dp(16), dp(12)]
             spacing: dp(4)
 
@@ -40,11 +41,13 @@ KV = """
             MDCard:
                 orientation: 'vertical'
                 padding: [dp(16), dp(12)]
-                adaptive_height: True
+                size_hint_y: None
+                height: self.minimum_height
                 radius: [dp(10)]
 
                 MDBoxLayout:
-                    adaptive_height: True
+                    size_hint_y: None
+                    height: self.minimum_height
 
                     MDLabel:
                         text: "Mode"
@@ -85,7 +88,8 @@ KV = """
             MDCard:
                 orientation: 'vertical'
                 padding: [dp(16), dp(12)]
-                adaptive_height: True
+                size_hint_y: None
+                height: self.minimum_height
                 radius: [dp(10)]
                 spacing: dp(10)
 
@@ -113,7 +117,8 @@ KV = """
                     text: root.saved_bin_id
 
                 MDBoxLayout:
-                    adaptive_height: True
+                    size_hint_y: None
+                    height: self.minimum_height
                     spacing: dp(8)
 
                     MDRaisedButton:
@@ -151,7 +156,8 @@ KV = """
             MDCard:
                 orientation: 'vertical'
                 padding: [dp(16), dp(12)]
-                adaptive_height: True
+                size_hint_y: None
+                height: self.minimum_height
                 radius: [dp(10)]
                 spacing: dp(8)
 
@@ -179,7 +185,8 @@ KV = """
             MDCard:
                 orientation: 'vertical'
                 padding: [dp(16), dp(12)]
-                adaptive_height: True
+                size_hint_y: None
+                height: self.minimum_height
                 radius: [dp(10)]
                 spacing: dp(8)
 
@@ -215,7 +222,8 @@ KV = """
             MDCard:
                 orientation: 'vertical'
                 padding: [dp(16), dp(12)]
-                adaptive_height: True
+                size_hint_y: None
+                height: self.minimum_height
                 radius: [dp(10)]
                 spacing: dp(4)
 

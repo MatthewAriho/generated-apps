@@ -27,13 +27,15 @@ KV = """
 
             MDBoxLayout:
                 orientation: 'vertical'
-                adaptive_height: True
+                size_hint_y: None
+                height: self.minimum_height
                 padding: [dp(20), dp(16)]
                 spacing: dp(14)
 
                 # ── Type toggle ──────────────────────────────────────────
                 MDBoxLayout:
-                    adaptive_height: True
+                    size_hint_y: None
+                    height: self.minimum_height
                     spacing: dp(12)
 
                     MDRaisedButton:

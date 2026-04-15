@@ -28,7 +28,8 @@ KV = """
         MDBoxLayout:
             id: content_box
             orientation: 'vertical'
-            adaptive_height: True
+            size_hint_y: None
+            height: self.minimum_height
             padding: [dp(12), dp(12)]
             spacing: dp(12)
 
@@ -36,7 +37,8 @@ KV = """
             MDBoxLayout:
                 id: empty_box
                 orientation: 'vertical'
-                adaptive_height: True
+                size_hint_y: None
+                height: self.minimum_height
                 spacing: dp(12)
                 padding: [0, dp(40), 0, 0]
 
@@ -64,7 +66,8 @@ KV = """
             MDBoxLayout:
                 id: accounts_list
                 orientation: 'vertical'
-                adaptive_height: True
+                size_hint_y: None
+                height: self.minimum_height
                 spacing: dp(8)
 """
 

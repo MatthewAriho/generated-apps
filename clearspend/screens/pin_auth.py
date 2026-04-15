@@ -45,7 +45,8 @@ KV = """
 
             # PIN dots
             MDBoxLayout:
-                adaptive_height: True
+                size_hint_y: None
+                height: self.minimum_height
                 size_hint_x: 0.5
                 pos_hint: {'center_x': 0.5}
                 spacing: dp(16)

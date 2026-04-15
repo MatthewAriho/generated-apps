@@ -25,7 +25,8 @@ KV = """
 
     # ── Filter bar ────────────────────────────────────────────────────
     MDBoxLayout:
-        adaptive_height: True
+        size_hint_y: None
+        height: self.minimum_height
         padding: [dp(12), dp(6)]
         spacing: dp(8)
         md_bg_color: app.theme_cls.bg_dark
@@ -68,7 +69,8 @@ KV = """
         MDBoxLayout:
             id: txn_list
             orientation: 'vertical'
-            adaptive_height: True
+            size_hint_y: None
+            height: self.minimum_height
             padding: [dp(12), dp(8), dp(12), dp(12)]
             spacing: dp(6)
 """

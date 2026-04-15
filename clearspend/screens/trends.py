@@ -33,7 +33,8 @@ KV = """
 
             MDBoxLayout:
                 orientation: 'vertical'
-                adaptive_height: True
+                size_hint_y: None
+                height: self.minimum_height
                 padding: [dp(12), dp(10)]
                 spacing: dp(10)
 
@@ -56,7 +57,8 @@ KV = """
                 MDBoxLayout:
                     id: categories_box
                     orientation: 'vertical'
-                    adaptive_height: True
+                    size_hint_y: None
+                    height: self.minimum_height
                     spacing: dp(8)
 
                 # Recurring
@@ -70,7 +72,8 @@ KV = """
                 MDBoxLayout:
                     id: recurring_box
                     orientation: 'vertical'
-                    adaptive_height: True
+                    size_hint_y: None
+                    height: self.minimum_height
                     spacing: dp(6)
 """
 
