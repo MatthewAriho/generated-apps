@@ -21,6 +21,13 @@ End of plan.
 After planning, dont wait for more input from me, start working immediately. implemennt this plan, save it in a markdown file in the workspace directory. Once done building each of the major versions highlighted, build the app and store the apk and commit the code so i can revert changes if necessary then move to the next version. Everytime you finish a major build aso update the plan.md doc and detail where you left off. make sure the plan is written in a way that is easy to hand off to another agent.
 
 
+## Coding Rules
+
+**No unicode / special characters in Python or KV strings.**
+- Do NOT use emoji, arrows, bullets, dashes, ellipsis, or any non-ASCII character as text in labels, buttons, or snackbars.
+- If an icon is needed, use a KivyMD MDIcon or an `icon:` property on a button/chip — do NOT embed the glyph as a string literal.
+- Acceptable ASCII fallbacks: `[ON]` / `[OFF]`, `(+)` / `(-)`, `|`, `-`, `...`, `*`, `_`.
+
 Do not wait for input. Start working now.
 
 1. Write main.py - Kivy app using Builder.load_string(), no external .kv file, only stdlib+kivy, works on 360x800dp portrait

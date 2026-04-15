@@ -78,7 +78,7 @@ fullscreen = 0
 android.presplash_color = #1a1a2e
 
 # (list) Permissions
-android.permissions = WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,INTERNET,ACCESS_NETWORK_STATE
+android.permissions = WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,INTERNET,ACCESS_NETWORK_STATE,USE_BIOMETRIC,USE_FINGERPRINT
 
 # (int) Target Android API, should be as high as possible.
 android.api = 34
@@ -128,12 +128,12 @@ android.private_storage = True
 #android.add_assets =
 
 # (list) Gradle dependencies to add
-#android.gradle_dependencies =
+android.gradle_dependencies = androidx.biometric:biometric:1.1.0
 
 # (bool) Enable AndroidX support. Enable when 'android.gradle_dependencies'
 # contains an 'androidx' package, or any package from Kotlin source.
 # android.enable_androidx requires android.gradle_dependencies
-# android.enable_androidx = False
+android.enable_androidx = True
 
 # (bool) Skip byte compile for .py files
 # android.no_byte_compile_python = False

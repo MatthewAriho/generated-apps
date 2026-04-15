@@ -218,7 +218,7 @@ class BudgetScreen(Screen):
                 )
                 box = MDBoxLayout(orientation="vertical", adaptive_height=True)
                 box.add_widget(MDLabel(
-                    text=f"💡 {s['category']}", font_style="Caption",
+                    text=f"[TIP] {s['category']}", font_style="Caption",
                     theme_text_color="Primary", adaptive_height=True,
                 ))
                 box.add_widget(MDLabel(

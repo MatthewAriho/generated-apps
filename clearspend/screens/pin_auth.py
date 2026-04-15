@@ -175,6 +175,17 @@ KV = """
                     height: dp(56)
                     md_bg_color: app.theme_cls.primary_dark
                     on_release: root.backspace()
+
+            MDRaisedButton:
+                id: biometric_btn
+                text: "USE FINGERPRINT"
+                size_hint_x: 1
+                size_hint_y: None
+                height: dp(48) if root.show_biometric else 0
+                opacity: 1 if root.show_biometric else 0
+                disabled: not root.show_biometric
+                md_bg_color: app.theme_cls.primary_dark
+                on_release: root.try_biometric()
 """
 
 Builder.load_string(KV)
@@ -185,10 +196,11 @@ def _hash_pin(pin: str) -> str:
 
 
 class PinAuthScreen(Screen):
-    title_text    = StringProperty("ClearSpend")
-    subtitle_text = StringProperty("Enter your 4-digit PIN")
-    error_text    = StringProperty("")
-    is_setup_mode = BooleanProperty(False)
+    title_text     = StringProperty("ClearSpend")
+    subtitle_text  = StringProperty("Enter your 4-digit PIN")
+    error_text     = StringProperty("")
+    is_setup_mode  = BooleanProperty(False)
+    show_biometric = BooleanProperty(False)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -201,13 +213,17 @@ class PinAuthScreen(Screen):
         self.error_text = ""
         stored = self._get_stored_pin()
         if stored is None:
-            self.is_setup_mode = True
-            self.title_text    = "Set a PIN"
-            self.subtitle_text = "Choose a 4-digit PIN to secure your data"
+            self.is_setup_mode  = True
+            self.show_biometric = False
+            self.title_text     = "Set a PIN"
+            self.subtitle_text  = "Choose a 4-digit PIN to secure your data"
         else:
             self.is_setup_mode = False
             self.title_text    = "ClearSpend"
             self.subtitle_text = "Enter your PIN"
+            # Offer biometric only in unlock mode
+            from utils.biometric import biometric_available
+            self.show_biometric = biometric_available()
         self._update_dots()
 
     # ---------------------------------------------------------------- pad
@@ -259,6 +275,19 @@ class PinAuthScreen(Screen):
             self._digits = ""
             self.error_text = "Incorrect PIN"
             self._update_dots()
+
+    # ---------------------------------------------------------------- biometric
+    def try_biometric(self):
+        from utils.biometric import prompt_biometric
+        self.error_text = ""
+        prompt_biometric(
+            on_success=self._proceed_to_app,
+            on_failure=self._on_biometric_failure,
+        )
+
+    def _on_biometric_failure(self, msg: str):
+        # User cancelled or error - stay on PIN screen so they can type PIN
+        self.error_text = "Biometric cancelled - enter PIN"
 
     # ---------------------------------------------------------------- helpers
     def _update_dots(self):

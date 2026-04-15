@@ -14,7 +14,7 @@ KivyMD Android budget app (renamed from BudgetApp → **ClearSpend**) built in 4
 | V0.1 | Core app, manual entry, bank connect UI, monthly tracking, local+cloud storage | DONE | `bin/clearspend-0.1-arm64-v8a-debug.apk` |
 | V1 | Recurring detection, category trend tracking | SOURCE DONE — needs APK | - |
 | V1.5 | Monthly budget, over/under calc, forecasting, saving tips | SOURCE DONE — needs APK | - |
-| V2 | Push notifications, PIN/fingerprint auth | TODO | - |
+| V2 | Push notifications, PIN/fingerprint auth | SOURCE DONE — needs APK | - |
 
 ---
 
@@ -150,25 +150,33 @@ git commit -m "V0.1: core app, manual entry, bank mock, cloud sync"
 
 ---
 
+## Coding Rules (apply to all versions)
+
+**No unicode / special characters in Python or KV strings.**
+- Do NOT use emoji, arrows, bullets, dashes, ellipsis, or any non-ASCII character as text in labels, buttons, or snackbars.
+- If an icon is needed, use a KivyMD `MDIcon` widget or an `icon:` property on a button/chip — do NOT embed the glyph as a string literal.
+- Acceptable ASCII fallbacks: `[ON]` / `[OFF]`, `(+)` / `(-)`, `|`, `-`, `...`, `*`, `_`.
+
+---
+
 ## Where To Continue (handoff)
 
-**Last completed:** V0.1 APK built. V1/V1.5/V2 source all written. Bug fixed (see Gotchas).
+**Last completed (2026-04-15):** All V1/V1.5/V2 source implemented and bug-fixed. Committed to `clearspend-progress` branch as single v0.4 commit (641b957). All Unicode/special characters replaced with ASCII-safe equivalents.
 
-**Next action:** Run `echo "y" | buildozer android debug` to produce V0.4 APK, then commit it.
+**V2 features implemented:**
+- `screens/pin_auth.py` — 4-digit PIN with SHA-256 hash in JsonStore; setup + unlock flow; biometric button shown when fingerprint enrolled
+- `utils/biometric.py` — AndroidX BiometricPrompt via Pyjnius; graceful fallback to PIN on error/cancel
+- `main.py` — spend alerts via `Clock.schedule_interval` every 30 min
+- `buildozer.spec` — `androidx.biometric:biometric:1.1.0` gradle dep, `android.enable_androidx = True`, `USE_BIOMETRIC` + `USE_FINGERPRINT` permissions
 
-Before building, bump `version = 0.2` in `buildozer.spec` for V1, `version = 0.3` for V1.5.
-
-**Key files already implemented for V1:**
-- `screens/trends.py` — category breakdown bars + recurring transactions detection
-- `models/database.py` — `get_recurring_transactions()` and `get_category_breakdown()` implemented
-- `screens/settings.py` — "View Trends" and "Set Budget" navigation (verify these buttons exist)
-
-**Key files already implemented for V1.5:**
-- `screens/budget.py` — per-category budgets, forecast engine, saving tips
+**Next action:** Run `echo "y" | buildozer android debug` to produce the v0.4 APK, then commit it.
 
 **Bugs fixed (2026-04-13/14):**
 - All screen KV strings used `app.theme_cls.primary_dark_color` which does not exist in KivyMD 1.x — the correct property is `app.theme_cls.primary_dark`. Fixed in all 5 screen files + `.buildozer/android/app` cached copies.
-- `screens/pin_auth.py` KV used semicolons to put multiple properties on one line (e.g. `text: "1"; size_hint_x: 1; height: dp(56); size_hint_y: None`). Kivy KV does NOT support semicolons as property separators — each property must be on its own line. This caused a KV parse/eval crash when the PIN screen rendered. Fixed by expanding all button properties to individual lines.
+- `screens/pin_auth.py` KV used semicolons to put multiple properties on one line. Kivy KV does NOT support semicolons as property separators — each property must be on its own line.
+- `mode: "outlined"` on MDTextField not valid in KivyMD 1.x — changed to `mode: "rectangle"` everywhere.
+- `from __future__ import annotations` was placed inside docstrings by sed — fixed manually in budget.py, pin_auth.py, bank_api.py, database.py.
+- Unicode characters (`—`, `·`, `…`, `↑`, `↓`, `●`, `○`, `💡`) replaced with ASCII equivalents across all screens.
 
 **Gotchas:**
 - KivyMD `MDBottomNavigation` tab content must be a single direct child widget

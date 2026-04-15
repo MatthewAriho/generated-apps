@@ -124,7 +124,7 @@ class TransactionListTab(MDBoxLayout):
             ripple_behavior=True,
         )
         left = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(2))
-        desc = (t.get("description") or t.get("category") or "—")[:32]
+        desc = (t.get("description") or t.get("category") or "-")[:32]
         left.add_widget(MDLabel(text=desc, font_style="Body1", adaptive_height=True))
         source_tag = f"  [{t.get('source','')}]" if t.get("source") != "manual" else ""
         left.add_widget(MDLabel(
