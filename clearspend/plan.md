@@ -15,6 +15,7 @@ KivyMD Android budget app (renamed from BudgetApp → **ClearSpend**) built in 4
 | V1 | Recurring detection, category trend tracking | SOURCE DONE — needs APK | - |
 | V1.5 | Monthly budget, over/under calc, forecasting, saving tips | SOURCE DONE — needs APK | - |
 | V2 | Push notifications, PIN/fingerprint auth | DONE | `bin/clearspend-0.5-arm64-v8a-debug.apk` |
+| V3 | Delete/edit transactions, CSV export, budget auto-copy | DONE | pending build |
 
 ---
 
@@ -169,7 +170,37 @@ git commit -m "V0.1: core app, manual entry, bank mock, cloud sync"
 - `main.py` — spend alerts via `Clock.schedule_interval` every 30 min
 - `buildozer.spec` — `androidx.biometric:biometric:1.1.0` gradle dep, `android.enable_androidx = True`, `USE_BIOMETRIC` + `USE_FINGERPRINT` permissions
 
-**Next action:** All planned versions complete. Consider V3 features: export to CSV/PDF, recurring budget auto-reset, multi-currency support, or app icon + splash screen polish before Play Store release.
+**Next action:** V3 complete. Build v0.6 APK. Consider V4 features: multi-currency support, PDF export, recurring budget auto-reset, or Play Store submission.
+
+---
+
+## V3 — Delete/Edit Transactions, CSV Export, Budget Auto-Copy (v0.6)
+
+All features implemented in this milestone:
+
+1. **Delete transaction** (`screens/transaction_list.py`)
+   - Each transaction row card now has a delete MDIconButton (trash icon, red)
+   - On press: MDDialog "Delete this transaction?" with CANCEL / DELETE
+   - On confirm: `db.delete_transaction(id)`, list refresh, Snackbar "Transaction deleted"
+
+2. **Edit transaction** (`screens/edit_transaction.py` — new file)
+   - New `EditTransactionScreen` modeled after `AddTransactionScreen`
+   - Pre-fills all fields from existing transaction via `load_transaction(txn)`
+   - Edit icon (pencil) on each row calls `app.go_to_edit(txn_id)`
+   - Save uses delete+insert replace pattern
+   - `go_to_edit(txn_id)` method added to `ClearSpendApp` in `main.py`
+   - Screen registered in KV root ScreenManager
+
+3. **CSV export** (`screens/settings.py`)
+   - "EXPORT CSV" button added in ANALYTICS card section
+   - Exports all transactions to `~/clearspend_export.csv` (desktop) or `user_data_dir` (Android)
+   - Columns: date, type, category, description, amount, source
+   - Uses stdlib `csv` module only
+
+4. **Budget auto-copy** (`screens/budget.py`)
+   - On `on_enter`, if current month has no budgets but previous month does:
+     MDDialog asks "Copy last month's budgets?" with YES / SKIP
+   - On YES: copies each budget row via `db.set_budget(ym, cat, amt)` then refreshes
 
 **Bugs fixed (2026-04-13/14):**
 - All screen KV strings used `app.theme_cls.primary_dark_color` which does not exist in KivyMD 1.x — the correct property is `app.theme_cls.primary_dark`. Fixed in all 5 screen files + `.buildozer/android/app` cached copies.

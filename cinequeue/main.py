@@ -2283,7 +2283,16 @@ class WatchScreen(MDScreen):
         inner.add_widget(sort_scroll)
 
         # Watch Now
-        inner.add_widget(SectionLabel(text="WATCH NOW  (on Plex)"))
+        watch_hdr = BoxLayout(size_hint_y=None, height=dp(36))
+        watch_hdr.add_widget(SectionLabel(text="WATCH NOW  (on Plex)"))
+        plex_refresh_btn = MDIconButton(
+            icon="refresh", theme_icon_color="Custom", icon_color=GOLD,
+            size_hint_x=None, icon_size=dp(20),
+        )
+        plex_refresh_btn.bind(on_press=lambda *_: self._force_refresh('plex'))
+        watch_hdr.add_widget(plex_refresh_btn)
+        inner.add_widget(watch_hdr)
+
         self._watch_container = BoxLayout(orientation='horizontal',
                                           size_hint=(None, None),
                                           height=dp(210), width=dp(360),
@@ -2294,7 +2303,16 @@ class WatchScreen(MDScreen):
         inner.add_widget(ws)
 
         # Recommended
-        inner.add_widget(SectionLabel(text="RECOMMENDED  (Plex + Letterboxd)"))
+        rec_hdr = BoxLayout(size_hint_y=None, height=dp(36))
+        rec_hdr.add_widget(SectionLabel(text="RECOMMENDED  (Plex + Letterboxd)"))
+        lb_refresh_btn = MDIconButton(
+            icon="refresh", theme_icon_color="Custom", icon_color=GREEN,
+            size_hint_x=None, icon_size=dp(20),
+        )
+        lb_refresh_btn.bind(on_press=lambda *_: self._force_refresh('both'))
+        rec_hdr.add_widget(lb_refresh_btn)
+        inner.add_widget(rec_hdr)
+
         self._rec_container = BoxLayout(orientation='horizontal',
                                         size_hint=(None, None),
                                         height=dp(210), width=dp(360),
@@ -2384,6 +2402,60 @@ class WatchScreen(MDScreen):
             self._sort_cache_key = cache_key
             self._sort_cache_val = result
         return result
+
+    def _force_refresh(self, source):
+        """Re-fetch TMDB metadata + posters for movies with missing/default values.
+        source='plex'  → only _plex_movies
+        source='both'  → _plex_movies + _lb_movies
+        """
+        tmdb_key = Settings.get('tmdb_key', '')
+        if not tmdb_key:
+            self._status_lbl.height = dp(24)
+            self._status_lbl.text = "No TMDB key — add it in Settings"
+            Clock.schedule_once(
+                lambda dt: setattr(self._status_lbl, 'text', '') or
+                           setattr(self._status_lbl, 'height', dp(0)), 4)
+            return
+
+        movies = list(_plex_movies) if source == 'plex' else list(_plex_movies + _lb_movies)
+        if not movies:
+            return
+
+        label = "Plex" if source == 'plex' else "Plex + Letterboxd"
+        self._status_lbl.height = dp(24)
+        self._status_lbl.text = f"Refreshing {label} metadata…"
+
+        # Force re-enrichment by temporarily blanking fields that look incomplete
+        # so fetch_tmdb_enrich_async's `needs` check triggers for each movie.
+        # We only blank fields that already hold default/placeholder values.
+        _DEFAULTS = ('?', 'Unknown', '', None)
+        for m in movies:
+            if not m.get('poster_url'):
+                m['poster_url'] = ''
+            if m.get('runtime', 0) < 1:
+                m['runtime'] = 0
+            if m.get('genre') in _DEFAULTS:
+                m['genre'] = '?'
+            if m.get('director') in _DEFAULTS:
+                m['director'] = '?'
+            if not m.get('year'):
+                m['year'] = 0
+            # Remove cached local poster path so PosterCache re-downloads if needed
+            if m.get('local_poster') and not os.path.exists(m.get('local_poster', '')):
+                m.pop('local_poster', None)
+
+        def _on_done():
+            MovieCache.save(_plex_movies, _lb_movies, _lb_stats)
+            # Force card pool rebuild so new posters/data appear
+            self._pool_plex_set = set()
+            self._pool_lb_set   = set()
+            self._status_lbl.text = f"Refresh complete"
+            _notify_refresh()
+            Clock.schedule_once(
+                lambda dt: setattr(self._status_lbl, 'text', '') or
+                           setattr(self._status_lbl, 'height', dp(0)), 3)
+
+        fetch_tmdb_enrich_async(movies, tmdb_key, _on_done)
 
     def _refresh_movies(self):
         # ── Rebuild card pool only when the underlying movie lists change ──────
@@ -3200,6 +3272,57 @@ class SettingsScreen(MDScreen):
         save_row.add_widget(Widget())
         inner.add_widget(save_row)
 
+        # Export / Import settings
+        inner.add_widget(SectionLabel(text="BACKUP & RESTORE"))
+
+        export_btn = MDRaisedButton(
+            text="Export Settings",
+            md_bg_color=CARD,
+            theme_text_color="Custom", text_color=ACCENT2,
+            size_hint=(None, None), height=dp(36),
+        )
+        export_btn.bind(on_press=self._export_settings)
+        export_row = BoxLayout(size_hint_y=None, height=dp(44))
+        export_row.add_widget(Widget())
+        export_row.add_widget(export_btn)
+        export_row.add_widget(Widget())
+        inner.add_widget(export_row)
+
+        export_hint = MDLabel(
+            text="Saves to /sdcard/Download/cinequeue_settings.json",
+            font_size=dp(9), theme_text_color="Custom", text_color=SUBTEXT,
+            size_hint_y=None, height=dp(18), halign='center', valign='middle')
+        export_hint.bind(size=lambda w, s: setattr(w, 'text_size', s))
+        inner.add_widget(export_hint)
+
+        self._import_path_inp = MDTextField(
+            hint_text="Import from file path",
+            helper_text="e.g. /sdcard/Download/cinequeue_settings.json",
+            helper_text_mode="on_focus",
+            mode="rectangle",
+            font_size=dp(12),
+            size_hint_y=None,
+            height=dp(46),
+            line_color_normal=(*SUBTEXT[:3], 0.5),
+            line_color_focus=ACCENT,
+            hint_text_color_normal=SUBTEXT,
+            text_color_normal=TEXT,
+        )
+        inner.add_widget(self._import_path_inp)
+
+        import_btn = MDRaisedButton(
+            text="Import Settings",
+            md_bg_color=CARD,
+            theme_text_color="Custom", text_color=GREEN,
+            size_hint=(None, None), height=dp(36),
+        )
+        import_btn.bind(on_press=self._import_settings)
+        import_row = BoxLayout(size_hint_y=None, height=dp(44))
+        import_row.add_widget(Widget())
+        import_row.add_widget(import_btn)
+        import_row.add_widget(Widget())
+        inner.add_widget(import_row)
+
         scroll.add_widget(inner)
         root.add_widget(scroll)
         self.add_widget(root)
@@ -3375,6 +3498,44 @@ class SettingsScreen(MDScreen):
             self._fetch_lb(data['lb_username'])
         if data.get('tmdb_key'):
             self._fetch_tmdb_posters(data['tmdb_key'])
+
+    def _export_settings(self, *_):
+        try:
+            src = Settings._file()
+            if not os.path.exists(src):
+                # Save current field values first so there is something to export
+                self._autosave()
+            dst_dir = '/sdcard/Download'
+            if not os.path.isdir(dst_dir):
+                dst_dir = os.path.expanduser('~')
+            dst = os.path.join(dst_dir, 'cinequeue_settings.json')
+            import shutil
+            shutil.copy2(src, dst)
+            self.set_status(f"Exported to {dst}", GREEN)
+        except Exception as e:
+            self.set_status(f"Export failed: {e}", ACCENT)
+
+    def _import_settings(self, *_):
+        path = self._import_path_inp.text.strip()
+        if not path:
+            path = '/sdcard/Download/cinequeue_settings.json'
+        try:
+            if not os.path.exists(path):
+                self.set_status(f"File not found: {path}", ACCENT)
+                return
+            with open(path) as fp:
+                data = json.load(fp)
+            if not isinstance(data, dict):
+                self.set_status("Invalid settings file", ACCENT)
+                return
+            Settings.save(data)
+            # Repopulate the input fields with newly imported values
+            for key, inp in self._inputs.items():
+                val = data.get(key, '')
+                inp.text = val if val else ''
+            self.set_status("Settings imported — tap Save & Connect", GREEN)
+        except Exception as e:
+            self.set_status(f"Import failed: {e}", ACCENT)
 
     def _fetch_plex(self, url, token):
         self.set_status("Connecting to Plex…")

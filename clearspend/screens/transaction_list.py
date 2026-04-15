@@ -7,9 +7,12 @@ from kivy.lang import Builder
 from kivy.metrics import dp
 from kivy.properties import StringProperty
 from kivymd.uix.boxlayout import MDBoxLayout
+from kivymd.uix.button import MDFlatButton, MDRaisedButton
 from kivymd.uix.card import MDCard
+from kivymd.uix.dialog import MDDialog
 from kivymd.uix.label import MDLabel
 from kivymd.uix.menu import MDDropdownMenu
+from kivymd.uix.snackbar import Snackbar
 
 KV = """
 <TransactionListTab>:
@@ -115,15 +118,16 @@ class TransactionListTab(MDBoxLayout):
             self.ids.txn_list.add_widget(self._make_row(t))
 
     def _make_row(self, t: dict) -> MDCard:
+        from kivymd.uix.button import MDIconButton
         card = MDCard(
             orientation="horizontal",
-            padding=[dp(12), dp(10)],
+            padding=[dp(8), dp(8)],
             size_hint_y=None,
             height=dp(66),
             radius=[dp(10)],
-            ripple_behavior=True,
+            ripple_behavior=False,
         )
-        left = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(2))
+        left = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(2), size_hint_x=1)
         desc = (t.get("description") or t.get("category") or "-")[:32]
         left.add_widget(MDLabel(text=desc, font_style="Body1", adaptive_height=True))
         source_tag = f"  [{t.get('source','')}]" if t.get("source") != "manual" else ""
@@ -141,10 +145,67 @@ class TransactionListTab(MDBoxLayout):
             text_color=color,
             font_style="Subtitle1",
             size_hint_x=0.38,
+            size_hint_y=None,
+            height=dp(66),
         )
+
+        txn_id = t["id"]
+        edit_btn = MDIconButton(
+            icon="pencil-outline",
+            size_hint=(None, None),
+            size=(dp(36), dp(36)),
+            pos_hint={"center_y": 0.5},
+            theme_text_color="Custom",
+            text_color=(0.5, 0.8, 1, 1),
+        )
+        edit_btn.bind(on_release=lambda *_, tid=txn_id: self._on_edit(tid))
+
+        del_btn = MDIconButton(
+            icon="delete-outline",
+            size_hint=(None, None),
+            size=(dp(36), dp(36)),
+            pos_hint={"center_y": 0.5},
+            theme_text_color="Custom",
+            text_color=(1, 0.45, 0.45, 1),
+        )
+        del_btn.bind(on_release=lambda *_, tid=txn_id: self._on_delete(tid))
+
         card.add_widget(left)
         card.add_widget(amt)
+        card.add_widget(edit_btn)
+        card.add_widget(del_btn)
         return card
+
+    # ---------------------------------------------------------------- edit / delete
+    def _on_edit(self, txn_id: int):
+        from kivy.app import App
+        App.get_running_app().go_to_edit(txn_id)
+
+    def _on_delete(self, txn_id: int):
+        self._pending_delete_id = txn_id
+        self._delete_dialog = MDDialog(
+            title="Delete this transaction?",
+            text="This action cannot be undone.",
+            buttons=[
+                MDFlatButton(
+                    text="CANCEL",
+                    on_release=lambda *_: self._delete_dialog.dismiss(),
+                ),
+                MDRaisedButton(
+                    text="DELETE",
+                    md_bg_color=(0.85, 0.2, 0.2, 1),
+                    on_release=self._confirm_delete,
+                ),
+            ],
+        )
+        self._delete_dialog.open()
+
+    def _confirm_delete(self, *_):
+        self._delete_dialog.dismiss()
+        from models.database import Database
+        Database.get().delete_transaction(self._pending_delete_id)
+        self.refresh()
+        Snackbar(text="Transaction deleted").open()
 
     # ---------------------------------------------------------------- filters
     def cycle_type_filter(self):

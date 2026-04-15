@@ -1,10 +1,13 @@
 """Settings tab - connectivity toggle, cloud sync config, app info."""
 from __future__ import annotations
+import csv
+import os
 
 from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.metrics import dp
 from kivy.properties import StringProperty
+from kivy.utils import platform
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.snackbar import Snackbar
 
@@ -194,6 +197,13 @@ KV = """
                     on_release: app.go_to_budget()
                     md_bg_color: app.theme_cls.primary_dark
 
+                MDRaisedButton:
+                    text: "EXPORT CSV"
+                    size_hint_y: None
+                    height: dp(42)
+                    on_release: root.do_export_csv()
+                    md_bg_color: app.theme_cls.primary_dark
+
             # ── About ─────────────────────────────────────────────────
             MDLabel:
                 text: "ABOUT"
@@ -348,6 +358,36 @@ class SettingsTab(MDBoxLayout):
         if app:
             app.root.transition.direction = "left"
             app.root.current = "pin_auth"
+
+    # ---------------------------------------------------------------- csv export
+    def do_export_csv(self):
+        """Export all transactions to a CSV file and show the path in a Snackbar."""
+        try:
+            from models.database import Database
+            txns = Database.get().get_transactions(limit=100000)
+
+            if platform == "android":
+                try:
+                    from kivy.app import App
+                    base = App.get_running_app().user_data_dir
+                except Exception:
+                    base = os.path.expanduser("~")
+            else:
+                base = os.path.expanduser("~")
+
+            out_path = os.path.join(base, "clearspend_export.csv")
+            with open(out_path, "w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(
+                    fh,
+                    fieldnames=["date", "type", "category", "description", "amount", "source"],
+                    extrasaction="ignore",
+                )
+                writer.writeheader()
+                writer.writerows(txns)
+
+            Snackbar(text=f"Exported to: {out_path}").open()
+        except Exception as exc:
+            Snackbar(text=f"Export failed: {exc}").open()
 
     # ----------------------------------------------------------------
     @staticmethod

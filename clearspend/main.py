@@ -17,14 +17,15 @@ from kivy.uix.screenmanager import ScreenManager, SlideTransition
 from kivymd.app import MDApp
 
 # Import screens - each module calls Builder.load_string() at import time
-from screens.dashboard        import DashboardTab        # noqa: F401
-from screens.add_transaction  import AddTransactionScreen # noqa: F401
-from screens.transaction_list import TransactionListTab   # noqa: F401
-from screens.bank_connect     import BankConnectTab       # noqa: F401
-from screens.settings         import SettingsTab          # noqa: F401
-from screens.trends           import TrendsScreen         # noqa: F401
-from screens.budget           import BudgetScreen         # noqa: F401
-from screens.pin_auth         import PinAuthScreen        # noqa: F401
+from screens.dashboard         import DashboardTab          # noqa: F401
+from screens.add_transaction   import AddTransactionScreen  # noqa: F401
+from screens.edit_transaction  import EditTransactionScreen # noqa: F401
+from screens.transaction_list  import TransactionListTab    # noqa: F401
+from screens.bank_connect      import BankConnectTab        # noqa: F401
+from screens.settings          import SettingsTab           # noqa: F401
+from screens.trends            import TrendsScreen          # noqa: F401
+from screens.budget            import BudgetScreen          # noqa: F401
+from screens.pin_auth          import PinAuthScreen         # noqa: F401
 
 from utils.connectivity import is_online
 from utils.cloud_sync   import CloudSync
@@ -82,6 +83,9 @@ ScreenManager:
 
     AddTransactionScreen:
         name: 'add_transaction'
+
+    EditTransactionScreen:
+        name: 'edit_transaction'
 
     TrendsScreen:
         name: 'trends'
@@ -206,6 +210,19 @@ class ClearSpendApp(MDApp):
     def go_to_add(self):
         self.root.transition.direction = "left"
         self.root.current = "add_transaction"
+
+    def go_to_edit(self, txn_id: int):
+        from models.database import Database
+        txns = Database.get().get_transactions(limit=100000)
+        txn = next((t for t in txns if t["id"] == txn_id), None)
+        if txn is None:
+            from kivymd.uix.snackbar import Snackbar
+            Snackbar(text="Transaction not found.").open()
+            return
+        edit_screen = self.root.get_screen("edit_transaction")
+        edit_screen.load_transaction(txn)
+        self.root.transition.direction = "left"
+        self.root.current = "edit_transaction"
 
     def go_back(self):
         self.root.transition.direction = "right"

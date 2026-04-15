@@ -120,7 +120,59 @@ class BudgetScreen(Screen):
         self._dialog: MDDialog | None = None
 
     def on_enter(self):
-        Clock.schedule_once(self.refresh, 0.1)
+        Clock.schedule_once(self._check_auto_copy, 0.1)
+
+    def _check_auto_copy(self, *_):
+        from models.database import Database
+        db  = Database.get()
+        ym  = f"{self._year:04d}-{self._month:02d}"
+
+        current_budgets = db.get_budgets(ym)
+        if current_budgets:
+            # Already has budgets — just refresh normally
+            self.refresh()
+            return
+
+        # Calculate previous month
+        prev_month = self._month - 1
+        prev_year  = self._year
+        if prev_month <= 0:
+            prev_month = 12
+            prev_year -= 1
+        prev_ym = f"{prev_year:04d}-{prev_month:02d}"
+
+        prev_budgets = db.get_budgets(prev_ym)
+        if not prev_budgets:
+            # Nothing to copy — just refresh normally
+            self.refresh()
+            return
+
+        # Ask user if they want to copy
+        from kivy.metrics import dp
+        from kivymd.uix.button import MDFlatButton, MDRaisedButton
+        from kivymd.uix.dialog import MDDialog
+
+        current_label = date(self._year, self._month, 1).strftime("%B %Y")
+
+        def _do_copy(*_):
+            self._copy_dialog.dismiss()
+            for b in prev_budgets:
+                db.set_budget(ym, b["category"], b["amount"])
+            self.refresh()
+
+        def _skip(*_):
+            self._copy_dialog.dismiss()
+            self.refresh()
+
+        self._copy_dialog = MDDialog(
+            title="Copy last month's budgets?",
+            text=f"No budgets set for {current_label}. Copy limits from last month?",
+            buttons=[
+                MDFlatButton(text="SKIP", on_release=_skip),
+                MDRaisedButton(text="YES", on_release=_do_copy),
+            ],
+        )
+        self._copy_dialog.open()
 
     def refresh(self, *_):
         from models.database import Database
