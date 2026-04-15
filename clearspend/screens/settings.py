@@ -76,6 +76,7 @@ KV = """
                     height: dp(40)
                     on_release: root.recheck_connectivity()
                     md_bg_color: app.theme_cls.primary_dark
+                    elevation: 0
 
             # ── Cloud Backup ──────────────────────────────────────────
             MDLabel:
@@ -118,7 +119,7 @@ KV = """
 
                 MDBoxLayout:
                     size_hint_y: None
-                    height: self.minimum_height
+                    height: dp(42)
                     spacing: dp(8)
 
                     MDRaisedButton:
@@ -128,6 +129,7 @@ KV = """
                         height: dp(42)
                         on_release: root.do_backup()
                         md_bg_color: app.theme_cls.primary_color
+                        elevation: 0
 
                     MDRaisedButton:
                         text: "RESTORE"
@@ -136,6 +138,7 @@ KV = """
                         height: dp(42)
                         on_release: root.do_restore()
                         md_bg_color: app.theme_cls.primary_dark
+                        elevation: 0
 
                 MDLabel:
                     id: sync_status_label
@@ -173,6 +176,7 @@ KV = """
                     height: dp(42)
                     on_release: root.change_pin()
                     md_bg_color: app.theme_cls.primary_dark
+                    elevation: 0
 
             # ── Analytics ─────────────────────────────────────────────
             MDLabel:
@@ -196,6 +200,7 @@ KV = """
                     height: dp(42)
                     on_release: app.go_to_trends()
                     md_bg_color: app.theme_cls.primary_color
+                    elevation: 0
 
                 MDRaisedButton:
                     text: "SET MONTHLY BUDGET"
@@ -203,6 +208,7 @@ KV = """
                     height: dp(42)
                     on_release: app.go_to_budget()
                     md_bg_color: app.theme_cls.primary_dark
+                    elevation: 0
 
                 MDRaisedButton:
                     text: "EXPORT CSV"
@@ -210,6 +216,7 @@ KV = """
                     height: dp(42)
                     on_release: root.do_export_csv()
                     md_bg_color: app.theme_cls.primary_dark
+                    elevation: 0
 
             # ── About ─────────────────────────────────────────────────
             MDLabel:

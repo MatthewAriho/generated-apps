@@ -44,7 +44,8 @@ ScreenManager:
 
             MDBottomNavigation:
                 id: nav
-                selected_color_background: app.theme_cls.primary_color
+                text_color_active: 1, 1, 1, 1
+                text_color_normal: 1, 1, 1, 0.5
 
                 MDBottomNavigationItem:
                     name: 'dashboard'

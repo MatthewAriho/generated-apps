@@ -141,20 +141,20 @@ class BankConnectTab(MDBoxLayout):
     def show_bank_selector(self):
         scotiabank_btn = MDRaisedButton(
             text="Scotiabank",
+            size_hint_x=None,
+            width=dp(120),
             on_release=lambda *_: self._close_and(self._show_scotiabank_login),
         )
         other_btn = MDFlatButton(
             text="Other Bank",
+            size_hint_x=None,
+            width=dp(120),
             on_release=lambda *_: self._close_and(self._show_generic_login),
-        )
-        cancel_btn = MDFlatButton(
-            text="Cancel",
-            on_release=lambda *_: self._dialog.dismiss() if self._dialog else None,
         )
         self._dialog = MDDialog(
             title="Connect Bank Account",
-            text="Choose your financial institution:",
-            buttons=[cancel_btn, other_btn, scotiabank_btn],
+            text="Choose your financial institution.\nTap outside to cancel.",
+            buttons=[other_btn, scotiabank_btn],
         )
         self._dialog.open()
 
@@ -187,9 +187,18 @@ class BankConnectTab(MDBoxLayout):
             type="custom",
             content_cls=box,
             buttons=[
-                MDFlatButton(text="CANCEL",
-                             on_release=lambda *_: self._dialog.dismiss()),
-                MDRaisedButton(text="CONNECT", on_release=_do_login),
+                MDFlatButton(
+                    text="CANCEL",
+                    size_hint_x=None,
+                    width=dp(100),
+                    on_release=lambda *_: self._dialog.dismiss(),
+                ),
+                MDRaisedButton(
+                    text="CONNECT",
+                    size_hint_x=None,
+                    width=dp(100),
+                    on_release=_do_login,
+                ),
             ],
         )
         self._dialog.open()

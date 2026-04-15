@@ -43,11 +43,13 @@ KV = """
                 # ── Month navigator ──────────────────────────────────────
                 MDBoxLayout:
                     size_hint_y: None
-                    height: self.minimum_height
+                    height: dp(48)
                     spacing: dp(4)
 
                     MDIconButton:
                         icon: 'chevron-left'
+                        size_hint: (None, None)
+                        size: (dp(48), dp(48))
                         on_release: root.prev_month()
 
                     MDLabel:
@@ -55,10 +57,14 @@ KV = """
                         text: root.current_month_label
                         halign: 'center'
                         font_style: 'H6'
-                        adaptive_height: True
+                        size_hint_y: None
+                        height: dp(48)
+                        valign: 'center'
 
                     MDIconButton:
                         icon: 'chevron-right'
+                        size_hint: (None, None)
+                        size: (dp(48), dp(48))
                         on_release: root.next_month()
 
                 # ── Balance card ──────────────────────────────────────────
