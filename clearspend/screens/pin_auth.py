@@ -287,8 +287,13 @@ class PinAuthScreen(Screen):
         )
 
     def _on_biometric_failure(self, msg: str):
-        # User cancelled or error - stay on PIN screen so they can type PIN
-        self.error_text = "Biometric cancelled - enter PIN"
+        # Biometric failed (likely ClassCastException) or user cancelled.
+        # Hide the button so user is not prompted again this session.
+        self.show_biometric = False
+        if "not supported" in msg.lower() or "cast" in msg.lower():
+            self.error_text = "Biometric not available - use PIN"
+        else:
+            self.error_text = "Biometric failed - enter PIN"
 
     # ---------------------------------------------------------------- helpers
     def _update_dots(self):

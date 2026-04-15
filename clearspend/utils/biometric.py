@@ -10,7 +10,12 @@ from __future__ import annotations
 
 
 def biometric_available() -> bool:
-    """Return True if device has enrolled biometric credentials ready to use."""
+    """Return True if device has enrolled biometric credentials ready to use.
+
+    Note: even if this returns True, the BiometricPrompt may fail because
+    Kivy's PythonActivity is not a FragmentActivity. The prompt_biometric
+    function handles that failure gracefully.
+    """
     try:
         from kivy.utils import platform
         if platform != "android":
@@ -82,4 +87,6 @@ def prompt_biometric(on_success, on_failure):
         bp.authenticate(info)
 
     except Exception as exc:
-        on_failure(f"Biometric unavailable: {exc}")
+        # BiometricPrompt requires FragmentActivity but Kivy uses Activity.
+        # This fails with ClassCastException on most devices.
+        on_failure(f"Biometric not supported: {exc}")

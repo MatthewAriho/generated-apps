@@ -67,6 +67,19 @@ KV = """
                         text_color: 1, 1, 1, 0.9
                         adaptive_height: True
 
+                # Spending pace visualization
+                MDCard:
+                    orientation: 'vertical'
+                    size_hint_y: None
+                    height: dp(90)
+                    radius: [dp(12)]
+                    padding: [dp(4), dp(4)]
+
+                    BoxLayout:
+                        id: pace_chart
+                        size_hint_y: None
+                        height: dp(75)
+
                 # Budget items
                 MDLabel:
                     text: "BUDGET LIMITS"
@@ -248,6 +261,7 @@ class BudgetScreen(Screen):
 
         summary = db.get_monthly_summary(ym)
         spent   = summary["expense"]
+        projected_end = 0.0
         if days_elapsed > 0:
             pace          = spent / days_elapsed
             projected_end = pace * total_days
@@ -258,6 +272,25 @@ class BudgetScreen(Screen):
                 f"Projected total: ${projected_end:,.2f} | "
                 f"{days_left} days remaining"
             )
+
+        # Update pace chart
+        total_budget = sum(
+            b["budget"] for b in db.get_budget_status(ym)
+        )
+        self._update_pace_chart(spent, projected_end, total_budget)
+
+    def _update_pace_chart(self, spent: float, projected: float, total_budget: float):
+        from utils.charts import BudgetPaceBar
+        container = self.ids.pace_chart
+        container.clear_widgets()
+        chart = BudgetPaceBar(
+            spent=spent,
+            projected=projected,
+            budget=total_budget,
+            label_text="Overall Spending Pace",
+        )
+        chart.size_hint = (1, 1)
+        container.add_widget(chart)
 
     def _generate_tips(self, statuses: list[dict]):
         self.ids.tips_box.clear_widgets()

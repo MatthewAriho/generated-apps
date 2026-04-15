@@ -134,6 +134,70 @@ KV = """
                                 font_style: "Subtitle1"
                                 adaptive_height: True
 
+                # ── Income vs Expense chart ───────────────────────────
+                MDCard:
+                    orientation: 'vertical'
+                    size_hint_y: None
+                    height: dp(150)
+                    radius: [dp(12)]
+                    padding: [dp(8), dp(8)]
+
+                    MDLabel:
+                        text: "Income vs Expense"
+                        font_style: "Caption"
+                        theme_text_color: "Secondary"
+                        adaptive_height: True
+                        padding: [dp(8), 0]
+
+                    BoxLayout:
+                        id: income_expense_chart
+                        size_hint_y: None
+                        height: dp(120)
+
+                # ── 6-Month Trend ────────────────────────────────────
+                MDCard:
+                    orientation: 'vertical'
+                    size_hint_y: None
+                    height: dp(180)
+                    radius: [dp(12)]
+                    padding: [dp(8), dp(8)]
+
+                    MDLabel:
+                        text: "Spending Trend"
+                        font_style: "Caption"
+                        theme_text_color: "Secondary"
+                        adaptive_height: True
+                        padding: [dp(8), 0]
+
+                    BoxLayout:
+                        id: trend_chart
+                        size_hint_y: None
+                        height: dp(150)
+
+                # ── Quick actions ─────────────────────────────────────
+                MDBoxLayout:
+                    size_hint_y: None
+                    height: dp(42)
+                    spacing: dp(8)
+
+                    MDRaisedButton:
+                        text: "TRENDS"
+                        size_hint_x: 1
+                        size_hint_y: None
+                        height: dp(42)
+                        on_release: app.go_to_trends()
+                        md_bg_color: app.theme_cls.primary_color
+                        elevation: 0
+
+                    MDRaisedButton:
+                        text: "BUDGET"
+                        size_hint_x: 1
+                        size_hint_y: None
+                        height: dp(42)
+                        on_release: app.go_to_budget()
+                        md_bg_color: app.theme_cls.primary_dark
+                        elevation: 0
+
                 # ── Recent transactions header ─────────────────────────
                 MDBoxLayout:
                     size_hint_y: None
@@ -204,6 +268,12 @@ class DashboardTab(MDBoxLayout):
         self.ids.income_label.text  = f"${s['income']:,.2f}"
         self.ids.expense_label.text = f"${s['expense']:,.2f}"
 
+        # Income vs Expense chart
+        self._update_income_expense_chart(s["income"], s["expense"])
+
+        # 6-month trend line
+        self._update_trend_chart(db)
+
         # Recent transactions
         txns = db.get_transactions(year_month=self._ym(), limit=10)
         self.ids.txn_list.clear_widgets()
@@ -218,6 +288,24 @@ class DashboardTab(MDBoxLayout):
                 adaptive_height=True,
                 padding=[0, dp(20)],
             ))
+
+    def _update_income_expense_chart(self, income: float, expense: float):
+        from utils.charts import IncomeExpenseBar
+        container = self.ids.income_expense_chart
+        container.clear_widgets()
+        chart = IncomeExpenseBar(income=income, expense=expense)
+        chart.size_hint = (1, 1)
+        container.add_widget(chart)
+
+    def _update_trend_chart(self, db):
+        from utils.charts import MonthlyTrendLine
+        summaries = db.get_monthly_summaries(6)
+        data_points = [(s["label"], s["expense"]) for s in summaries]
+        container = self.ids.trend_chart
+        container.clear_widgets()
+        chart = MonthlyTrendLine(data_points=data_points)
+        chart.size_hint = (1, 1)
+        container.add_widget(chart)
 
     def _make_row(self, t: dict) -> MDCard:
         card = MDCard(

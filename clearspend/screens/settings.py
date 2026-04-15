@@ -255,9 +255,9 @@ KV = """
                     md_bg_color: app.theme_cls.primary_dark
                     elevation: 0
 
-            # ── Analytics ─────────────────────────────────────────────
+            # ── Data Export ───────────────────────────────────────────
             MDLabel:
-                text: "ANALYTICS"
+                text: "DATA EXPORT"
                 font_style: "Overline"
                 theme_text_color: "Secondary"
                 adaptive_height: True
@@ -271,21 +271,11 @@ KV = """
                 radius: [dp(10)]
                 spacing: dp(8)
 
-                MDRaisedButton:
-                    text: "VIEW SPENDING TRENDS"
-                    size_hint_y: None
-                    height: dp(42)
-                    on_release: app.go_to_trends()
-                    md_bg_color: app.theme_cls.primary_color
-                    elevation: 0
-
-                MDRaisedButton:
-                    text: "SET MONTHLY BUDGET"
-                    size_hint_y: None
-                    height: dp(42)
-                    on_release: app.go_to_budget()
-                    md_bg_color: app.theme_cls.primary_dark
-                    elevation: 0
+                MDLabel:
+                    text: "Export all transactions as a CSV file."
+                    font_style: "Caption"
+                    theme_text_color: "Secondary"
+                    adaptive_height: True
 
                 MDRaisedButton:
                     text: "EXPORT CSV"

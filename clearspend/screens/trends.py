@@ -46,6 +46,26 @@ KV = """
                     halign: 'center'
                     adaptive_height: True
 
+                # Donut chart
+                MDCard:
+                    orientation: 'vertical'
+                    size_hint_y: None
+                    height: dp(220)
+                    radius: [dp(12)]
+                    padding: [dp(8), dp(8)]
+
+                    MDLabel:
+                        text: "Category Breakdown"
+                        font_style: "Caption"
+                        theme_text_color: "Secondary"
+                        adaptive_height: True
+                        padding: [dp(8), 0]
+
+                    BoxLayout:
+                        id: donut_chart
+                        size_hint_y: None
+                        height: dp(190)
+
                 # Category breakdown
                 MDLabel:
                     text: "SPENDING BY CATEGORY"
@@ -96,8 +116,11 @@ class TrendsScreen(Screen):
         db = Database.get()
         ym = datetime.now().strftime("%Y-%m")
 
-        # --- Category breakdown bars ---
+        # --- Donut chart ---
         breakdown = db.get_category_breakdown(ym)
+        self._update_donut(breakdown)
+
+        # --- Category breakdown bars ---
         self.ids.categories_box.clear_widgets()
 
         max_amt = max((r["total"] for r in breakdown), default=1)
@@ -145,6 +168,18 @@ class TrendsScreen(Screen):
                 text="No recurring transactions detected yet.\nAdd a few months of data to see patterns.",
                 halign="center", theme_text_color="Secondary", adaptive_height=True,
             ))
+
+    def _update_donut(self, breakdown: list[dict]):
+        from utils.charts import DonutChart, CHART_COLORS
+        container = self.ids.donut_chart
+        container.clear_widgets()
+        slices = []
+        for i, row in enumerate(breakdown[:10]):
+            color = CHART_COLORS[i % len(CHART_COLORS)]
+            slices.append((row["category"], row["total"], color))
+        chart = DonutChart(slices=slices)
+        chart.size_hint = (1, 1)
+        container.add_widget(chart)
 
     @staticmethod
     def _make_bar_card(category: str, amount: float, pct: float) -> MDCard:

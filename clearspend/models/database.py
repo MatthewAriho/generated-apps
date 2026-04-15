@@ -194,6 +194,35 @@ class Database:
         result["balance"] = round(result["income"] - result["expense"], 2)
         return result
 
+    def get_monthly_summaries(self, num_months: int = 6) -> list[dict]:
+        """Return income/expense summaries for the last N months."""
+        results = []
+        now = datetime.now()
+        for offset in range(num_months - 1, -1, -1):
+            m = now.month - offset
+            y = now.year
+            while m <= 0:
+                m += 12
+                y -= 1
+            ym = f"{y:04d}-{m:02d}"
+            s = self.get_monthly_summary(ym)
+            s["month"] = ym
+            s["label"] = date(y, m, 1).strftime("%b")
+            results.append(s)
+        return results
+
+    def get_daily_spending(self, year_month: str) -> list[dict]:
+        """Return day-by-day expense totals for a month."""
+        cur = self.conn.execute(
+            """SELECT date, SUM(amount) as total
+               FROM transactions
+               WHERE type='expense' AND date LIKE ?
+               GROUP BY date
+               ORDER BY date""",
+            (f"{year_month}%",),
+        )
+        return [dict(r) for r in cur]
+
     def get_category_breakdown(self, year_month: str | None = None) -> list[dict]:
         if year_month is None:
             year_month = datetime.now().strftime("%Y-%m")
