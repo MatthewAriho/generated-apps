@@ -44,13 +44,16 @@ ScreenManager:
 
             MDBottomNavigation:
                 id: nav
+                transition_duration: 0.1
                 text_color_active: 1, 1, 1, 1
                 text_color_normal: 1, 1, 1, 0.5
+                panel_color: app.theme_cls.bg_darkest
 
                 MDBottomNavigationItem:
                     name: 'dashboard'
                     text: 'Home'
                     icon: 'home'
+                    font_size: "11sp"
                     on_tab_press: app.refresh_dashboard()
 
                     DashboardTab:
@@ -60,6 +63,7 @@ ScreenManager:
                     name: 'history'
                     text: 'History'
                     icon: 'history'
+                    font_size: "11sp"
                     on_tab_press: app.refresh_history()
 
                     TransactionListTab:
@@ -69,6 +73,7 @@ ScreenManager:
                     name: 'bank'
                     text: 'Bank'
                     icon: 'bank'
+                    font_size: "11sp"
                     on_tab_press: app.refresh_bank()
 
                     BankConnectTab:
@@ -78,6 +83,7 @@ ScreenManager:
                     name: 'settings'
                     text: 'Settings'
                     icon: 'cog'
+                    font_size: "11sp"
 
                     SettingsTab:
                         id: settings_tab
@@ -242,6 +248,16 @@ class ClearSpendApp(MDApp):
     def go_to_budget(self):
         self.root.transition.direction = "left"
         self.root.current = "budget"
+
+    # ---------------------------------------------------------------- demo mode
+    def load_demo_data(self):
+        """Seed database with realistic demo transactions and budgets."""
+        from models.database import Database
+        from kivymd.uix.snackbar import Snackbar
+        db = Database.get()
+        db.seed_demo_data()
+        self.refresh_dashboard()
+        Snackbar(text="Demo data loaded!").open()
 
     # ---------------------------------------------------------------- refresh helpers
     def refresh_dashboard(self, *_):

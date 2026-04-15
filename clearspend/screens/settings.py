@@ -218,6 +218,44 @@ KV = """
                     md_bg_color: app.theme_cls.primary_dark
                     elevation: 0
 
+            # ── Demo Mode ─────────────────────────────────────────────
+            MDLabel:
+                text: "DEMO MODE"
+                font_style: "Overline"
+                theme_text_color: "Secondary"
+                adaptive_height: True
+                padding: [dp(4), dp(16), 0, dp(4)]
+
+            MDCard:
+                orientation: 'vertical'
+                padding: [dp(16), dp(12)]
+                size_hint_y: None
+                height: self.minimum_height
+                radius: [dp(10)]
+                spacing: dp(8)
+
+                MDLabel:
+                    text: "Load 3 months of realistic demo transactions and budgets to test all features."
+                    font_style: "Caption"
+                    theme_text_color: "Secondary"
+                    adaptive_height: True
+
+                MDRaisedButton:
+                    text: "LOAD DEMO DATA"
+                    size_hint_y: None
+                    height: dp(42)
+                    on_release: root.load_demo()
+                    md_bg_color: [0.8, 0.5, 0.1, 1]
+                    elevation: 0
+
+                MDRaisedButton:
+                    text: "CLEAR ALL DATA"
+                    size_hint_y: None
+                    height: dp(42)
+                    on_release: root.clear_all_data()
+                    md_bg_color: [0.7, 0.2, 0.2, 1]
+                    elevation: 0
+
             # ── About ─────────────────────────────────────────────────
             MDLabel:
                 text: "ABOUT"
@@ -373,6 +411,46 @@ class SettingsTab(MDBoxLayout):
         if app:
             app.root.transition.direction = "left"
             app.root.current = "pin_auth"
+
+    # ---------------------------------------------------------------- demo mode
+    def load_demo(self):
+        app = self._get_app()
+        if app:
+            app.load_demo_data()
+
+    def clear_all_data(self):
+        from kivymd.uix.dialog import MDDialog
+        from kivymd.uix.button import MDFlatButton, MDRaisedButton
+
+        def _confirm(*_):
+            self._clear_dialog.dismiss()
+            from models.database import Database
+            db = Database.get()
+            db.conn.execute("DELETE FROM transactions")
+            db.conn.execute("DELETE FROM budgets")
+            db.conn.execute("DELETE FROM bank_accounts")
+            db.conn.commit()
+            Snackbar(text="All data cleared.").open()
+            app = self._get_app()
+            if app:
+                app.refresh_dashboard()
+
+        self._clear_dialog = MDDialog(
+            title="Clear all data?",
+            text="This will delete all transactions, budgets, and bank accounts. This cannot be undone.",
+            buttons=[
+                MDFlatButton(
+                    text="CANCEL",
+                    on_release=lambda *_: self._clear_dialog.dismiss(),
+                ),
+                MDRaisedButton(
+                    text="DELETE ALL",
+                    md_bg_color=(0.85, 0.2, 0.2, 1),
+                    on_release=_confirm,
+                ),
+            ],
+        )
+        self._clear_dialog.open()
 
     # ---------------------------------------------------------------- csv export
     def do_export_csv(self):

@@ -266,6 +266,100 @@ class Database:
         )
         return [dict(r) for r in cur]
 
+    # --------------------------------------------------------- demo data
+    def seed_demo_data(self):
+        """Insert realistic demo transactions across 3 months + budgets."""
+        import random
+        now = datetime.now()
+        year = now.year
+        month = now.month
+
+        # Build 3 months of year-month strings: current, prev, prev-prev
+        months = []
+        for offset in range(3):
+            m = month - offset
+            y = year
+            while m <= 0:
+                m += 12
+                y -= 1
+            months.append(f"{y:04d}-{m:02d}")
+
+        # Demo transactions
+        expense_items = [
+            ("Food & Dining",      "Grocery run",          35.00, 85.00),
+            ("Restaurants",        "Lunch with team",      15.00, 55.00),
+            ("Restaurants",        "Dinner out",           25.00, 70.00),
+            ("Transportation",    "Gas fillup",           40.00, 75.00),
+            ("Rides (Uber/Lyft)", "Uber to downtown",     12.00, 28.00),
+            ("Entertainment",     "Movie tickets",        14.00, 22.00),
+            ("Shopping",          "Amazon order",         20.00, 90.00),
+            ("Utilities",         "Electric bill",        60.00, 95.00),
+            ("Utilities",         "Internet bill",        55.00, 65.00),
+            ("ATM / Cash",        "ATM withdrawal",       40.00, 100.00),
+            ("Subscriptions",     "Netflix",              15.99, 15.99),
+            ("Subscriptions",     "Spotify",               9.99,  9.99),
+            ("Nightlife / Bars",  "Friday drinks",        30.00, 65.00),
+            ("Healthcare",        "Pharmacy",             12.00, 45.00),
+            ("Food & Dining",     "Coffee shop",           4.50,  7.50),
+            ("Shopping",          "Clothing store",        35.00, 80.00),
+        ]
+
+        income_items = [
+            ("Salary / Income",   "Paycheck",           2200.00, 2800.00),
+            ("Freelance",         "Side project",        200.00,  600.00),
+        ]
+
+        rng = random.Random(42)  # deterministic seed
+
+        for ym in months:
+            y, m = map(int, ym.split("-"))
+            # Add 10-14 random expense transactions per month
+            n_expenses = rng.randint(10, 14)
+            for _ in range(n_expenses):
+                cat, desc, lo, hi = rng.choice(expense_items)
+                amount = round(rng.uniform(lo, hi), 2)
+                day = rng.randint(1, 28)
+                tx_date = f"{y:04d}-{m:02d}-{day:02d}"
+                self.add_transaction(
+                    amount=amount,
+                    type_="expense",
+                    category=cat,
+                    description=desc,
+                    trans_date=tx_date,
+                    source="demo",
+                )
+
+            # Add 1-2 income transactions per month
+            for inc_cat, inc_desc, inc_lo, inc_hi in income_items:
+                if rng.random() < 0.85:  # 85% chance each income appears
+                    amount = round(rng.uniform(inc_lo, inc_hi), 2)
+                    day = 1 if "Paycheck" in inc_desc else rng.randint(5, 25)
+                    tx_date = f"{y:04d}-{m:02d}-{day:02d}"
+                    self.add_transaction(
+                        amount=amount,
+                        type_="income",
+                        category=inc_cat,
+                        description=inc_desc,
+                        trans_date=tx_date,
+                        source="demo",
+                    )
+
+        # Set budgets for current month
+        current_ym = months[0]
+        budget_limits = [
+            ("Food & Dining",     200.00),
+            ("Restaurants",       150.00),
+            ("Transportation",    100.00),
+            ("Rides (Uber/Lyft)",  50.00),
+            ("Entertainment",      60.00),
+            ("Shopping",          120.00),
+            ("Nightlife / Bars",   80.00),
+            ("ATM / Cash",        100.00),
+            ("Subscriptions",      40.00),
+        ]
+        for cat, amt in budget_limits:
+            self.set_budget(current_ym, cat, amt)
+
     # --------------------------------------------------------- export / backup
     def export_to_dict(self) -> dict:
         return {
