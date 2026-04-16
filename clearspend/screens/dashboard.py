@@ -134,6 +134,33 @@ KV = """
                                 font_style: "Subtitle1"
                                 adaptive_height: True
 
+                # ── Monthly comparison ────────────────────────────────
+                MDCard:
+                    id: comparison_card
+                    orientation: 'horizontal'
+                    padding: [dp(16), dp(10)]
+                    size_hint_y: None
+                    height: dp(50)
+                    radius: [dp(10)]
+                    md_bg_color: app.theme_cls.bg_dark
+
+                    MDIcon:
+                        id: comparison_icon
+                        icon: "trending-neutral"
+                        theme_text_color: "Custom"
+                        text_color: 0.6, 0.6, 0.6, 1
+                        size_hint: (None, None)
+                        size: (dp(24), dp(24))
+                        pos_hint: {"center_y": 0.5}
+
+                    MDLabel:
+                        id: comparison_label
+                        text: ""
+                        font_style: "Caption"
+                        theme_text_color: "Secondary"
+                        adaptive_height: True
+                        padding: [dp(8), 0]
+
                 # ── Income vs Expense chart ───────────────────────────
                 MDCard:
                     orientation: 'vertical'
@@ -268,6 +295,9 @@ class DashboardTab(MDBoxLayout):
         self.ids.income_label.text  = f"${s['income']:,.2f}"
         self.ids.expense_label.text = f"${s['expense']:,.2f}"
 
+        # Monthly comparison
+        self._update_comparison(db)
+
         # Income vs Expense chart
         self._update_income_expense_chart(s["income"], s["expense"])
 
@@ -288,6 +318,45 @@ class DashboardTab(MDBoxLayout):
                 adaptive_height=True,
                 padding=[0, dp(20)],
             ))
+
+    def _update_comparison(self, db):
+        """Show spending comparison vs previous month."""
+        # Get previous month
+        pm = self._month - 1
+        py = self._year
+        if pm <= 0:
+            pm = 12
+            py -= 1
+        prev_ym = f"{py:04d}-{pm:02d}"
+        prev = db.get_monthly_summary(prev_ym)
+        curr = db.get_monthly_summary(self._ym())
+
+        curr_exp = curr["expense"]
+        prev_exp = prev["expense"]
+        diff = curr_exp - prev_exp
+
+        try:
+            if prev_exp > 0 and abs(diff) > 0.01:
+                pct = abs(diff) / prev_exp * 100
+                prev_label = date(py, pm, 1).strftime("%b")
+                if diff > 0:
+                    self.ids.comparison_icon.icon = "trending-up"
+                    self.ids.comparison_icon.text_color = (1, 0.45, 0.45, 1)
+                    self.ids.comparison_label.text = (
+                        f"Spending ${abs(diff):,.0f} ({pct:.0f}%) more than {prev_label}"
+                    )
+                else:
+                    self.ids.comparison_icon.icon = "trending-down"
+                    self.ids.comparison_icon.text_color = (0.4, 1, 0.55, 1)
+                    self.ids.comparison_label.text = (
+                        f"Spending ${abs(diff):,.0f} ({pct:.0f}%) less than {prev_label}"
+                    )
+            else:
+                self.ids.comparison_icon.icon = "trending-neutral"
+                self.ids.comparison_icon.text_color = (0.6, 0.6, 0.6, 1)
+                self.ids.comparison_label.text = "No previous month data to compare"
+        except Exception:
+            self.ids.comparison_label.text = ""
 
     def _update_income_expense_chart(self, income: float, expense: float):
         from utils.charts import IncomeExpenseBar

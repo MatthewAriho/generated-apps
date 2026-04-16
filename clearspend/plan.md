@@ -16,6 +16,8 @@ KivyMD Android budget app (renamed from BudgetApp → **ClearSpend**) built in 4
 | V1.5 | Monthly budget, over/under calc, forecasting, saving tips | SOURCE DONE — needs APK | - |
 | V2 | Push notifications, PIN/fingerprint auth | DONE | `bin/clearspend-0.5-arm64-v8a-debug.apk` |
 | V3 | Delete/edit transactions, CSV export, budget auto-copy | DONE | pending build |
+| V3.5 | Android layout fix, Plaid integration, charts, demo mode | DONE | pending build |
+| V4 | Settings reorg, PIN hardening, search, monthly comparison, logo | DONE | pending build |
 
 ---
 
@@ -170,7 +172,7 @@ git commit -m "V0.1: core app, manual entry, bank mock, cloud sync"
 - `main.py` — spend alerts via `Clock.schedule_interval` every 30 min
 - `buildozer.spec` — `androidx.biometric:biometric:1.1.0` gradle dep, `android.enable_androidx = True`, `USE_BIOMETRIC` + `USE_FINGERPRINT` permissions
 
-**Next action:** V3 complete. Build v0.6 APK. Consider V4 features: multi-currency support, PDF export, recurring budget auto-reset, or Play Store submission.
+**Next action:** V4 complete. See ROADMAP.md for V5+ feature ideas.
 
 ---
 

@@ -206,9 +206,8 @@ class EditTransactionScreen(Screen):
 
         from models.database import Database
         db = Database.get()
-        # Replace pattern: delete old, insert new
-        db.delete_transaction(int(self.txn_id))
-        db.add_transaction(
+        db.update_transaction(
+            transaction_id=int(self.txn_id),
             amount=amount,
             type_=self.tx_type,
             category=category,

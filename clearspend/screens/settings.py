@@ -1,4 +1,4 @@
-"""Settings tab - connectivity toggle, cloud sync config, app info."""
+"""Settings tab - security, data, cloud sync, developer options."""
 from __future__ import annotations
 import csv
 import os
@@ -6,7 +6,7 @@ import os
 from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.metrics import dp
-from kivy.properties import StringProperty
+from kivy.properties import BooleanProperty, NumericProperty, StringProperty
 from kivy.utils import platform
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.snackbar import Snackbar
@@ -30,9 +30,9 @@ KV = """
             padding: [dp(16), dp(12)]
             spacing: dp(4)
 
-            # ── Connectivity ─────────────────────────────────────────
+            # ── Security ─────────────────────────────────────────────
             MDLabel:
-                text: "CONNECTIVITY"
+                text: "SECURITY"
                 font_style: "Overline"
                 theme_text_color: "Secondary"
                 adaptive_height: True
@@ -44,13 +44,44 @@ KV = """
                 size_hint_y: None
                 height: self.minimum_height
                 radius: [dp(10)]
+                spacing: dp(8)
+
+                MDLabel:
+                    text: "PIN lock protects your financial data on app launch."
+                    font_style: "Caption"
+                    theme_text_color: "Secondary"
+                    adaptive_height: True
+
+                MDRaisedButton:
+                    text: "CHANGE PIN"
+                    size_hint_y: None
+                    height: dp(42)
+                    on_release: root.change_pin()
+                    md_bg_color: app.theme_cls.primary_dark
+                    elevation: 0
+
+            # ── Data & Sync ──────────────────────────────────────────
+            MDLabel:
+                text: "DATA & SYNC"
+                font_style: "Overline"
+                theme_text_color: "Secondary"
+                adaptive_height: True
+                padding: [dp(4), dp(16), 0, dp(4)]
+
+            MDCard:
+                orientation: 'vertical'
+                padding: [dp(16), dp(12)]
+                size_hint_y: None
+                height: self.minimum_height
+                radius: [dp(10)]
+                spacing: dp(10)
 
                 MDBoxLayout:
                     size_hint_y: None
                     height: self.minimum_height
 
                     MDLabel:
-                        text: "Mode"
+                        text: "Status"
                         font_style: "Body1"
                         adaptive_height: True
 
@@ -65,44 +96,14 @@ KV = """
                         adaptive_height: True
 
                 MDLabel:
-                    text: "ClearSpend works offline. Transactions are saved locally."
-                    font_style: "Caption"
-                    theme_text_color: "Secondary"
-                    adaptive_height: True
-
-                MDRaisedButton:
-                    text: "RECHECK CONNECTION"
-                    size_hint_y: None
-                    height: dp(40)
-                    on_release: root.recheck_connectivity()
-                    md_bg_color: app.theme_cls.primary_dark
-                    elevation: 0
-
-            # ── Cloud Backup ──────────────────────────────────────────
-            MDLabel:
-                text: "CLOUD BACKUP (JSONBIN.IO)"
-                font_style: "Overline"
-                theme_text_color: "Secondary"
-                adaptive_height: True
-                padding: [dp(4), dp(16), 0, dp(4)]
-
-            MDCard:
-                orientation: 'vertical'
-                padding: [dp(16), dp(12)]
-                size_hint_y: None
-                height: self.minimum_height
-                radius: [dp(10)]
-                spacing: dp(10)
-
-                MDLabel:
-                    text: "Get a free API key at jsonbin.io. Your data is encrypted before upload."
+                    text: "Cloud backup via JSONBin.io"
                     font_style: "Caption"
                     theme_text_color: "Secondary"
                     adaptive_height: True
 
                 MDTextField:
                     id: api_key_field
-                    hint_text: "JSONBin API Key ($2b$...)"
+                    hint_text: "JSONBin API Key"
                     mode: "rectangle"
                     password: True
                     size_hint_y: None
@@ -148,135 +149,6 @@ KV = """
                     adaptive_height: True
                     halign: "center"
 
-            # ── Plaid Integration ────────────────────────────────────
-            MDLabel:
-                text: "PLAID INTEGRATION"
-                font_style: "Overline"
-                theme_text_color: "Secondary"
-                adaptive_height: True
-                padding: [dp(4), dp(16), 0, dp(4)]
-
-            MDCard:
-                orientation: 'vertical'
-                padding: [dp(16), dp(12)]
-                size_hint_y: None
-                height: self.minimum_height
-                radius: [dp(10)]
-                spacing: dp(10)
-
-                MDLabel:
-                    text: "Connect real bank accounts via Plaid. Get sandbox keys at dashboard.plaid.com."
-                    font_style: "Caption"
-                    theme_text_color: "Secondary"
-                    adaptive_height: True
-
-                MDTextField:
-                    id: plaid_client_id_field
-                    hint_text: "Client ID"
-                    mode: "rectangle"
-                    size_hint_y: None
-                    height: dp(56)
-                    text: root.saved_plaid_client_id
-
-                MDTextField:
-                    id: plaid_secret_field
-                    hint_text: "Secret"
-                    mode: "rectangle"
-                    password: True
-                    size_hint_y: None
-                    height: dp(56)
-                    text: root.saved_plaid_secret
-
-                MDBoxLayout:
-                    size_hint_y: None
-                    height: dp(36)
-                    spacing: dp(4)
-
-                    MDLabel:
-                        text: "Environment:"
-                        font_style: "Caption"
-                        adaptive_height: True
-
-                    MDRaisedButton:
-                        id: plaid_env_btn
-                        text: root.saved_plaid_env.upper()
-                        size_hint_x: None
-                        width: dp(120)
-                        size_hint_y: None
-                        height: dp(36)
-                        font_size: "11sp"
-                        on_release: root.cycle_plaid_env()
-                        md_bg_color: app.theme_cls.primary_dark
-                        elevation: 0
-
-                MDRaisedButton:
-                    text: "SAVE PLAID CREDENTIALS"
-                    size_hint_y: None
-                    height: dp(42)
-                    on_release: root.save_plaid_credentials()
-                    md_bg_color: app.theme_cls.primary_color
-                    elevation: 0
-
-                MDLabel:
-                    id: plaid_status_label
-                    text: root.plaid_status_text
-                    font_style: "Caption"
-                    theme_text_color: "Secondary"
-                    adaptive_height: True
-                    halign: "center"
-
-            # ── Security ─────────────────────────────────────────────
-            MDLabel:
-                text: "SECURITY"
-                font_style: "Overline"
-                theme_text_color: "Secondary"
-                adaptive_height: True
-                padding: [dp(4), dp(16), 0, dp(4)]
-
-            MDCard:
-                orientation: 'vertical'
-                padding: [dp(16), dp(12)]
-                size_hint_y: None
-                height: self.minimum_height
-                radius: [dp(10)]
-                spacing: dp(8)
-
-                MDLabel:
-                    text: "PIN lock protects your financial data on app launch."
-                    font_style: "Caption"
-                    theme_text_color: "Secondary"
-                    adaptive_height: True
-
-                MDRaisedButton:
-                    text: "CHANGE PIN"
-                    size_hint_y: None
-                    height: dp(42)
-                    on_release: root.change_pin()
-                    md_bg_color: app.theme_cls.primary_dark
-                    elevation: 0
-
-            # ── Data Export ───────────────────────────────────────────
-            MDLabel:
-                text: "DATA EXPORT"
-                font_style: "Overline"
-                theme_text_color: "Secondary"
-                adaptive_height: True
-                padding: [dp(4), dp(16), 0, dp(4)]
-
-            MDCard:
-                orientation: 'vertical'
-                padding: [dp(16), dp(12)]
-                size_hint_y: None
-                height: self.minimum_height
-                radius: [dp(10)]
-                spacing: dp(8)
-
-                MDLabel:
-                    text: "Export all transactions as a CSV file."
-                    font_style: "Caption"
-                    theme_text_color: "Secondary"
-                    adaptive_height: True
-
                 MDRaisedButton:
                     text: "EXPORT CSV"
                     size_hint_y: None
@@ -285,9 +157,9 @@ KV = """
                     md_bg_color: app.theme_cls.primary_dark
                     elevation: 0
 
-            # ── Demo Mode ─────────────────────────────────────────────
+            # ── Data Management ──────────────────────────────────────
             MDLabel:
-                text: "DEMO MODE"
+                text: "DATA MANAGEMENT"
                 font_style: "Overline"
                 theme_text_color: "Secondary"
                 adaptive_height: True
@@ -300,12 +172,6 @@ KV = """
                 height: self.minimum_height
                 radius: [dp(10)]
                 spacing: dp(8)
-
-                MDLabel:
-                    text: "Load 3 months of realistic demo transactions and budgets to test all features."
-                    font_style: "Caption"
-                    theme_text_color: "Secondary"
-                    adaptive_height: True
 
                 MDRaisedButton:
                     text: "LOAD DEMO DATA"
@@ -332,6 +198,7 @@ KV = """
                 padding: [dp(4), dp(16), 0, dp(4)]
 
             MDCard:
+                id: about_card
                 orientation: 'vertical'
                 padding: [dp(16), dp(12)]
                 size_hint_y: None
@@ -345,16 +212,110 @@ KV = """
                     adaptive_height: True
 
                 MDLabel:
-                    text: "Version 0.3 | Built with KivyMD"
+                    id: version_label
+                    text: "Version 0.7 | Built with KivyMD"
                     font_style: "Caption"
                     theme_text_color: "Secondary"
                     adaptive_height: True
+                    on_touch_down: if self.collide_point(*args[1].pos): root._on_version_tap()
 
                 MDLabel:
                     text: "Track expenses, connect your bank, and take control\\nof your finances."
                     font_style: "Body2"
                     theme_text_color: "Secondary"
                     adaptive_height: True
+
+            # ── Developer (hidden until 5-tap) ────────────────────────
+            MDBoxLayout:
+                id: dev_section
+                orientation: 'vertical'
+                size_hint_y: None
+                height: self.minimum_height if root.show_dev_options else 0
+                opacity: 1 if root.show_dev_options else 0
+
+                MDLabel:
+                    text: "DEVELOPER"
+                    font_style: "Overline"
+                    theme_text_color: "Secondary"
+                    adaptive_height: True
+                    padding: [dp(4), dp(16), 0, dp(4)]
+
+                MDCard:
+                    orientation: 'vertical'
+                    padding: [dp(16), dp(12)]
+                    size_hint_y: None
+                    height: self.minimum_height
+                    radius: [dp(10)]
+                    spacing: dp(10)
+
+                    MDLabel:
+                        text: "Plaid API credentials (dashboard.plaid.com)"
+                        font_style: "Caption"
+                        theme_text_color: "Secondary"
+                        adaptive_height: True
+
+                    MDTextField:
+                        id: plaid_client_id_field
+                        hint_text: "Client ID"
+                        mode: "rectangle"
+                        size_hint_y: None
+                        height: dp(56)
+                        text: root.saved_plaid_client_id
+
+                    MDTextField:
+                        id: plaid_secret_field
+                        hint_text: "Secret"
+                        mode: "rectangle"
+                        password: True
+                        size_hint_y: None
+                        height: dp(56)
+                        text: root.saved_plaid_secret
+
+                    MDBoxLayout:
+                        size_hint_y: None
+                        height: dp(36)
+                        spacing: dp(4)
+
+                        MDLabel:
+                            text: "Environment:"
+                            font_style: "Caption"
+                            adaptive_height: True
+
+                        MDRaisedButton:
+                            id: plaid_env_btn
+                            text: root.saved_plaid_env.upper()
+                            size_hint_x: None
+                            width: dp(120)
+                            size_hint_y: None
+                            height: dp(36)
+                            font_size: "11sp"
+                            on_release: root.cycle_plaid_env()
+                            md_bg_color: app.theme_cls.primary_dark
+                            elevation: 0
+
+                    MDRaisedButton:
+                        text: "SAVE PLAID CREDENTIALS"
+                        size_hint_y: None
+                        height: dp(42)
+                        on_release: root.save_plaid_credentials()
+                        md_bg_color: app.theme_cls.primary_color
+                        elevation: 0
+
+                    MDLabel:
+                        id: plaid_status_label
+                        text: root.plaid_status_text
+                        font_style: "Caption"
+                        theme_text_color: "Secondary"
+                        adaptive_height: True
+                        halign: "center"
+
+                    MDRaisedButton:
+                        text: "RECHECK CONNECTION"
+                        size_hint_y: None
+                        height: dp(40)
+                        on_release: root.recheck_connectivity()
+                        md_bg_color: app.theme_cls.primary_dark
+                        elevation: 0
 """
 
 Builder.load_string(KV)
@@ -369,6 +330,8 @@ class SettingsTab(MDBoxLayout):
     saved_plaid_secret    = StringProperty("")
     saved_plaid_env       = StringProperty("sandbox")
     plaid_status_text     = StringProperty("Not configured.")
+    show_dev_options      = BooleanProperty(False)
+    _version_tap_count    = NumericProperty(0)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -402,6 +365,20 @@ class SettingsTab(MDBoxLayout):
         Clock.schedule_once(self._update_connectivity, 1.5)
         Snackbar(text="Checking connectivity...").open()
 
+    # ---------------------------------------------------------------- 5-tap dev mode
+    def _on_version_tap(self):
+        self._version_tap_count += 1
+        remaining = 5 - self._version_tap_count
+        if remaining > 0 and remaining <= 3:
+            Snackbar(text=f"{remaining} taps to developer options").open()
+        if self._version_tap_count >= 5:
+            self.show_dev_options = not self.show_dev_options
+            self._version_tap_count = 0
+            if self.show_dev_options:
+                Snackbar(text="Developer options enabled").open()
+            else:
+                Snackbar(text="Developer options hidden").open()
+
     # ---------------------------------------------------------------- cloud backup
     def _save_credentials(self):
         api_key = self.ids.api_key_field.text.strip()
@@ -431,10 +408,9 @@ class SettingsTab(MDBoxLayout):
             if app:
                 result = app.cloud_sync.backup(Database.get().export_to_dict())
                 if result["success"]:
-                    # Save the bin_id so future runs update the same bin
                     self.ids.bin_id_field.text = result.get("bin_id", "")
                     self._save_credentials()
-                    self.sync_status_text = f"Backup successful. Bin: {result.get('bin_id','')[:12]}..."
+                    self.sync_status_text = f"Backup OK. Bin: {result.get('bin_id','')[:12]}..."
                     Snackbar(text="Backup complete!").open()
                 else:
                     self.sync_status_text = f"Backup failed: {result['error']}"
@@ -472,7 +448,6 @@ class SettingsTab(MDBoxLayout):
         from kivy.storage.jsonstore import JsonStore
         import os
         from kivy.utils import platform
-        # Clear existing PIN so setup mode triggers
         if platform == "android":
             try:
                 from android.storage import app_storage_path  # type: ignore
@@ -519,16 +494,43 @@ class SettingsTab(MDBoxLayout):
             app.load_demo_data()
 
     def clear_all_data(self):
+        """Clear all data - requires PIN confirmation."""
         from kivymd.uix.dialog import MDDialog
         from kivymd.uix.button import MDFlatButton, MDRaisedButton
+        from kivymd.uix.textfield import MDTextField
+
+        pin_field = MDTextField(
+            hint_text="Enter your PIN to confirm",
+            mode="rectangle",
+            password=True,
+            input_filter="int",
+            max_text_length=4,
+            size_hint_y=None,
+            height=dp(56),
+        )
+        box = MDBoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            height=dp(70),
+        )
+        box.add_widget(pin_field)
 
         def _confirm(*_):
+            # Verify PIN
+            entered = pin_field.text.strip()
+            from screens.pin_auth import _hash_pin, PinAuthScreen
+            stored = PinAuthScreen._get_stored_pin()
+            if stored and _hash_pin(entered) != stored:
+                Snackbar(text="Incorrect PIN.").open()
+                return
+
             self._clear_dialog.dismiss()
             from models.database import Database
             db = Database.get()
             db.conn.execute("DELETE FROM transactions")
             db.conn.execute("DELETE FROM budgets")
             db.conn.execute("DELETE FROM bank_accounts")
+            db.conn.execute("DELETE FROM plaid_sync_cursors")
             db.conn.commit()
             Snackbar(text="All data cleared.").open()
             app = self._get_app()
@@ -537,7 +539,9 @@ class SettingsTab(MDBoxLayout):
 
         self._clear_dialog = MDDialog(
             title="Clear all data?",
-            text="This will delete all transactions, budgets, and bank accounts. This cannot be undone.",
+            text="This will delete everything. Enter your PIN to confirm.",
+            type="custom",
+            content_cls=box,
             buttons=[
                 MDFlatButton(
                     text="CANCEL",
@@ -554,7 +558,7 @@ class SettingsTab(MDBoxLayout):
 
     # ---------------------------------------------------------------- csv export
     def do_export_csv(self):
-        """Export all transactions to a CSV file and show the path in a Snackbar."""
+        """Export all transactions to a CSV file."""
         try:
             from models.database import Database
             txns = Database.get().get_transactions(limit=100000)

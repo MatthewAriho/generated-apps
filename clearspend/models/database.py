@@ -152,6 +152,24 @@ class Database:
         self.conn.commit()
         return cur.lastrowid
 
+    def update_transaction(
+        self,
+        transaction_id: int,
+        amount: float,
+        type_: str,
+        category: str,
+        description: str,
+        trans_date: str,
+    ):
+        """Update an existing transaction in place (preserves source, bank_account_id, plaid_id)."""
+        self.conn.execute(
+            """UPDATE transactions
+               SET amount=?, type=?, category=?, description=?, date=?
+               WHERE id=?""",
+            (amount, type_, category, description, trans_date, transaction_id),
+        )
+        self.conn.commit()
+
     def delete_transaction(self, transaction_id: int):
         self.conn.execute("DELETE FROM transactions WHERE id = ?", (transaction_id,))
         self.conn.commit()

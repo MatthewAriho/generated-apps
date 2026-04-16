@@ -109,10 +109,13 @@ class ClearSpendApp(MDApp):
     is_online   = BooleanProperty(True)
     sync_status = StringProperty("idle")
 
+    AUTO_LOCK_SECONDS = 300  # 5 minutes
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.cloud_sync = CloudSync()
         self._load_cloud_credentials()
+        self._last_activity = 0
 
     # ---------------------------------------------------------------- kivy
     def build(self):
@@ -133,8 +136,20 @@ class ClearSpendApp(MDApp):
         return root
 
     def on_resume(self):
-        """Check for Plaid deep link intent when app returns to foreground."""
+        """Check for Plaid deep link + auto-lock on resume."""
+        import time
         Clock.schedule_once(lambda *_: self._check_plaid_intent(), 0.5)
+        # Auto-lock if idle too long
+        if self._last_activity > 0:
+            elapsed = time.time() - self._last_activity
+            if elapsed > self.AUTO_LOCK_SECONDS:
+                self.root.current = "pin_auth"
+
+    def on_pause(self):
+        """Record pause time for auto-lock calculation."""
+        import time
+        self._last_activity = time.time()
+        return True
 
     def _init_db(self, *_):
         from models.database import Database

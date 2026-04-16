@@ -23,6 +23,22 @@ KV = """
         title: "Transaction History"
         elevation: 2
 
+    # ── Search bar ────────────────────────────────────────────────────
+    MDBoxLayout:
+        size_hint_y: None
+        height: dp(50)
+        padding: [dp(12), dp(6)]
+        md_bg_color: app.theme_cls.bg_dark
+
+        MDTextField:
+            id: search_field
+            hint_text: "Search transactions..."
+            mode: "rectangle"
+            size_hint_y: None
+            height: dp(40)
+            icon_right: "magnify"
+            on_text: root.on_search_text(self.text)
+
     # ── Filter bar ────────────────────────────────────────────────────
     MDBoxLayout:
         size_hint_y: None
@@ -82,6 +98,7 @@ class TransactionListTab(MDBoxLayout):
     filter_month_label = StringProperty("")
     filter_type_label  = StringProperty("All")
     filter_type        = StringProperty("all")
+    _search_text       = ""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -98,10 +115,23 @@ class TransactionListTab(MDBoxLayout):
     def _update_month_label(self):
         self.filter_month_label = date(self._year, self._month, 1).strftime("%b %Y")
 
+    def on_search_text(self, text: str):
+        self._search_text = text.strip().lower()
+        self.refresh()
+
     def refresh(self, *_):
         from models.database import Database
         type_ = None if self.filter_type == "all" else self.filter_type
         txns = Database.get().get_transactions(year_month=self._ym(), type_=type_, limit=200)
+
+        # Apply search filter
+        if self._search_text:
+            q = self._search_text
+            txns = [
+                t for t in txns
+                if q in (t.get("description") or "").lower()
+                or q in (t.get("category") or "").lower()
+            ]
 
         self.ids.count_label.text = f"{len(txns)} items"
         self.ids.txn_list.clear_widgets()

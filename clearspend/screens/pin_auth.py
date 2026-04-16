@@ -203,10 +203,15 @@ class PinAuthScreen(Screen):
     is_setup_mode  = BooleanProperty(False)
     show_biometric = BooleanProperty(False)
 
+    # Rate limiting: [max_attempts, lockout_seconds]
+    _LOCKOUT_TIERS = [(3, 30), (6, 300), (9, 1800)]
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._digits = ""
         self._confirm_digits = ""
+        self._fail_count = 0
+        self._locked_until = 0  # timestamp
 
     def on_enter(self):
         self._digits = ""
@@ -229,6 +234,14 @@ class PinAuthScreen(Screen):
 
     # ---------------------------------------------------------------- pad
     def press_digit(self, d: str):
+        # Check lockout
+        import time
+        now = time.time()
+        if now < self._locked_until:
+            remaining = int(self._locked_until - now)
+            self.error_text = f"Locked. Try again in {remaining}s"
+            return
+
         if len(self._digits) >= 4:
             return
         self._digits += d
@@ -269,12 +282,29 @@ class PinAuthScreen(Screen):
                 self._update_dots()
 
     def _handle_unlock(self):
+        import time
         stored = self._get_stored_pin()
         if stored and _hash_pin(self._digits) == stored:
+            self._fail_count = 0
+            self._locked_until = 0
             self._proceed_to_app()
         else:
+            self._fail_count += 1
             self._digits = ""
-            self.error_text = "Incorrect PIN"
+
+            # Check if we hit a lockout tier
+            lockout_secs = 0
+            for threshold, secs in self._LOCKOUT_TIERS:
+                if self._fail_count >= threshold:
+                    lockout_secs = secs
+
+            if lockout_secs > 0:
+                self._locked_until = time.time() + lockout_secs
+                self.error_text = f"Too many attempts. Locked for {lockout_secs}s"
+            else:
+                remaining = self._LOCKOUT_TIERS[0][0] - self._fail_count
+                self.error_text = f"Incorrect PIN ({remaining} attempts left)"
+
             self._update_dots()
 
     # ---------------------------------------------------------------- biometric
