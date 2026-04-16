@@ -116,6 +116,7 @@ class ClearSpendApp(MDApp):
         self.cloud_sync = CloudSync()
         self._load_cloud_credentials()
         self._last_activity = 0
+        self._screen_history = []
 
     # ---------------------------------------------------------------- kivy
     def build(self):
@@ -134,6 +135,10 @@ class ClearSpendApp(MDApp):
         # Check for deep link intent on cold start
         Clock.schedule_once(lambda *_: self._check_plaid_intent(), 1.0)
         return root
+
+    def on_start(self):
+        from kivy.core.window import Window
+        Window.bind(on_keyboard=self._on_keyboard)
 
     def on_resume(self):
         """Check for Plaid deep link + auto-lock on resume."""
@@ -234,8 +239,37 @@ class ClearSpendApp(MDApp):
 
         Clock.schedule_once(_do, 0.2)
 
+    # ---------------------------------------------------------------- back button
+    def _on_keyboard(self, window, key, *args):
+        """Intercept Android hardware back button (key 27 / 1001)."""
+        if key in (27, 1001):
+            return self._handle_back()
+        return False
+
+    def _handle_back(self):
+        current = self.root.current
+        # On PIN screen or home, let the system handle (minimise / exit)
+        if current in ("pin_auth", "home"):
+            return False
+        # Pop history if available
+        if self._screen_history:
+            prev = self._screen_history.pop()
+            self.root.transition.direction = "right"
+            self.root.current = prev
+            return True
+        # No history - fall back to home
+        self.root.transition.direction = "right"
+        self.root.current = "home"
+        return True
+
+    def _push_history(self):
+        current = self.root.current
+        if current not in ("pin_auth",):
+            self._screen_history.append(current)
+
     # ---------------------------------------------------------------- navigation
     def go_to_add(self):
+        self._push_history()
         self.root.transition.direction = "left"
         self.root.current = "add_transaction"
 
@@ -249,12 +283,18 @@ class ClearSpendApp(MDApp):
             return
         edit_screen = self.root.get_screen("edit_transaction")
         edit_screen.load_transaction(txn)
+        self._push_history()
         self.root.transition.direction = "left"
         self.root.current = "edit_transaction"
 
     def go_back(self):
-        self.root.transition.direction = "right"
-        self.root.current = "home"
+        if self._screen_history:
+            prev = self._screen_history.pop()
+            self.root.transition.direction = "right"
+            self.root.current = prev
+        else:
+            self.root.transition.direction = "right"
+            self.root.current = "home"
 
     def go_to_history(self):
         try:
@@ -263,10 +303,12 @@ class ClearSpendApp(MDApp):
             pass
 
     def go_to_trends(self):
+        self._push_history()
         self.root.transition.direction = "left"
         self.root.current = "trends"
 
     def go_to_budget(self):
+        self._push_history()
         self.root.transition.direction = "left"
         self.root.current = "budget"
 

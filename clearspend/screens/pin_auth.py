@@ -338,6 +338,7 @@ class PinAuthScreen(Screen):
         from kivy.app import App
         app = App.get_running_app()
         if app:
+            app._screen_history.clear()
             app.root.transition.direction = "left"
             app.root.current = "home"
 
