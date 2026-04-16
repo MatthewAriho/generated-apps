@@ -1,14 +1,11 @@
-"""Budget screen - set monthly limits, track over/under, forecast spend.
-
-V1.5 feature: populated in V1.5 milestone.
-"""
+"""Budget screen + tab - set monthly limits, track over/under, forecast spend."""
 from __future__ import annotations
 from datetime import datetime, date
 
 from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.metrics import dp
-from kivy.properties import StringProperty
+from kivy.properties import StringProperty, BooleanProperty
 from kivy.uix.screenmanager import Screen
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.button import MDFlatButton, MDRaisedButton
@@ -20,95 +17,94 @@ from kivymd.uix.snackbar import Snackbar
 from kivymd.uix.textfield import MDTextField
 
 KV = """
-<BudgetScreen>:
-    name: 'budget'
+<BudgetContent>:
+    orientation: 'vertical'
+    md_bg_color: app.theme_cls.bg_normal
 
-    MDBoxLayout:
-        orientation: 'vertical'
-        md_bg_color: app.theme_cls.bg_normal
+    MDTopAppBar:
+        id: top_bar
+        title: "Monthly Budget"
+        elevation: 2
+        left_action_items: root.back_items
+        right_action_items: [["plus", lambda x: root.show_add_budget(), "Add budget"]]
 
-        MDTopAppBar:
-            title: "Monthly Budget"
-            elevation: 2
-            left_action_items: [["arrow-left", lambda x: app.go_back()]]
-            right_action_items: [["plus", lambda x: root.show_add_budget(), "Add budget"]]
+    ScrollView:
+        do_scroll_x: False
 
-        ScrollView:
-            do_scroll_x: False
+        MDBoxLayout:
+            orientation: 'vertical'
+            size_hint_y: None
+            height: self.minimum_height
+            padding: [dp(12), dp(10)]
+            spacing: dp(10)
+
+            MDLabel:
+                id: period_label
+                text: root.period_label
+                font_style: 'H6'
+                halign: 'center'
+                adaptive_height: True
+
+            MDCard:
+                orientation: 'vertical'
+                padding: [dp(16), dp(12)]
+                size_hint_y: None
+                height: self.minimum_height
+                radius: [dp(12)]
+                md_bg_color: app.theme_cls.primary_dark
+
+                MDLabel:
+                    id: forecast_label
+                    text: root.forecast_text
+                    font_style: "Body1"
+                    theme_text_color: "Custom"
+                    text_color: 1, 1, 1, 0.9
+                    adaptive_height: True
+
+            MDCard:
+                orientation: 'vertical'
+                size_hint_y: None
+                height: dp(90)
+                radius: [dp(12)]
+                padding: [dp(4), dp(4)]
+
+                BoxLayout:
+                    id: pace_chart
+                    size_hint_y: None
+                    height: dp(75)
+
+            MDLabel:
+                text: "BUDGET LIMITS"
+                font_style: "Overline"
+                theme_text_color: "Secondary"
+                adaptive_height: True
+                padding: [dp(4), dp(8), 0, dp(2)]
 
             MDBoxLayout:
+                id: budget_list
                 orientation: 'vertical'
                 size_hint_y: None
                 height: self.minimum_height
-                padding: [dp(12), dp(10)]
-                spacing: dp(10)
+                spacing: dp(8)
 
-                MDLabel:
-                    id: period_label
-                    text: root.period_label
-                    font_style: 'H6'
-                    halign: 'center'
-                    adaptive_height: True
+            MDLabel:
+                text: "SAVING TIPS"
+                font_style: "Overline"
+                theme_text_color: "Secondary"
+                adaptive_height: True
+                padding: [dp(4), dp(12), 0, dp(2)]
 
-                # Forecast card
-                MDCard:
-                    orientation: 'vertical'
-                    padding: [dp(16), dp(12)]
-                    size_hint_y: None
-                    height: self.minimum_height
-                    radius: [dp(12)]
-                    md_bg_color: app.theme_cls.primary_dark
+            MDBoxLayout:
+                id: tips_box
+                orientation: 'vertical'
+                size_hint_y: None
+                height: self.minimum_height
+                spacing: dp(6)
 
-                    MDLabel:
-                        id: forecast_label
-                        text: root.forecast_text
-                        font_style: "Body1"
-                        theme_text_color: "Custom"
-                        text_color: 1, 1, 1, 0.9
-                        adaptive_height: True
-
-                # Spending pace visualization
-                MDCard:
-                    orientation: 'vertical'
-                    size_hint_y: None
-                    height: dp(90)
-                    radius: [dp(12)]
-                    padding: [dp(4), dp(4)]
-
-                    BoxLayout:
-                        id: pace_chart
-                        size_hint_y: None
-                        height: dp(75)
-
-                # Budget items
-                MDLabel:
-                    text: "BUDGET LIMITS"
-                    font_style: "Overline"
-                    theme_text_color: "Secondary"
-                    adaptive_height: True
-                    padding: [dp(4), dp(8), 0, dp(2)]
-
-                MDBoxLayout:
-                    id: budget_list
-                    orientation: 'vertical'
-                    size_hint_y: None
-                    height: self.minimum_height
-                    spacing: dp(8)
-
-                # Saving tips
-                MDLabel:
-                    text: "SAVING TIPS"
-                    font_style: "Overline"
-                    theme_text_color: "Secondary"
-                    adaptive_height: True
-                    padding: [dp(4), dp(12), 0, dp(2)]
-
-                MDBoxLayout:
-                    id: tips_box
-                    orientation: 'vertical'
-                    size_hint_y: None
-                    height: self.minimum_height
-                    spacing: dp(6)
+<BudgetScreen>:
+    name: 'budget'
+    BudgetContent:
+        show_back: True
 """
 
 Builder.load_string(KV)
@@ -124,9 +120,21 @@ _SAVING_TIPS = {
 }
 
 
-class BudgetScreen(Screen):
+def _get_app():
+    from kivy.app import App
+    return App.get_running_app()
+
+
+class BudgetContent(MDBoxLayout):
     period_label  = StringProperty("")
     forecast_text = StringProperty("Set budgets to see your forecast.")
+    show_back = BooleanProperty(False)
+
+    @property
+    def back_items(self):
+        if self.show_back:
+            return [["arrow-left", lambda x: _get_app().go_back()]]
+        return []
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -134,10 +142,19 @@ class BudgetScreen(Screen):
         self._year  = now.year
         self._month = now.month
         self.period_label = date(now.year, now.month, 1).strftime("%B %Y")
-        self._dialog: MDDialog | None = None
+        self._dialog = None
+        self._copy_dialog = None
+        Clock.schedule_once(self._check_auto_copy, 0.5)
 
-    def on_enter(self):
-        Clock.schedule_once(self._check_auto_copy, 0.1)
+    def on_show_back(self, instance, value):
+        try:
+            self.ids.top_bar.left_action_items = self.back_items
+        except Exception:
+            pass
+
+    def on_tab_press(self):
+        """Called when this tab is pressed in bottom nav."""
+        self._check_auto_copy()
 
     def _check_auto_copy(self, *_):
         from models.database import Database
@@ -146,11 +163,9 @@ class BudgetScreen(Screen):
 
         current_budgets = db.get_budgets(ym)
         if current_budgets:
-            # Already has budgets — just refresh normally
             self.refresh()
             return
 
-        # Calculate previous month
         prev_month = self._month - 1
         prev_year  = self._year
         if prev_month <= 0:
@@ -160,14 +175,8 @@ class BudgetScreen(Screen):
 
         prev_budgets = db.get_budgets(prev_ym)
         if not prev_budgets:
-            # Nothing to copy — just refresh normally
             self.refresh()
             return
-
-        # Ask user if they want to copy
-        from kivy.metrics import dp
-        from kivymd.uix.button import MDFlatButton, MDRaisedButton
-        from kivymd.uix.dialog import MDDialog
 
         current_label = date(self._year, self._month, 1).strftime("%B %Y")
 
@@ -211,7 +220,7 @@ class BudgetScreen(Screen):
             ))
             self.forecast_text = "Set category budgets to see forecasting."
 
-    def _make_budget_card(self, s: dict) -> MDCard:
+    def _make_budget_card(self, s):
         pct_int = int(s["pct"] * 100)
         over = s["spent"] > s["budget"]
         card = MDCard(
@@ -251,8 +260,7 @@ class BudgetScreen(Screen):
         card.add_widget(bar)
         return card
 
-    def _update_forecast(self, db, ym: str):
-        from models.database import Database
+    def _update_forecast(self, db, ym):
         import calendar
         year, month = map(int, ym.split("-"))
         today = datetime.now()
@@ -269,17 +277,14 @@ class BudgetScreen(Screen):
             self.forecast_text = (
                 f"Day {days_elapsed}/{total_days} | "
                 f"Spent ${spent:,.2f} | "
-                f"Projected total: ${projected_end:,.2f} | "
-                f"{days_left} days remaining"
+                f"Projected: ${projected_end:,.2f} | "
+                f"{days_left} days left"
             )
 
-        # Update pace chart
-        total_budget = sum(
-            b["budget"] for b in db.get_budget_status(ym)
-        )
+        total_budget = sum(b["budget"] for b in db.get_budget_status(ym))
         self._update_pace_chart(spent, projected_end, total_budget)
 
-    def _update_pace_chart(self, spent: float, projected: float, total_budget: float):
+    def _update_pace_chart(self, spent, projected, total_budget):
         from utils.charts import BudgetPaceBar
         container = self.ids.pace_chart
         container.clear_widgets()
@@ -292,7 +297,7 @@ class BudgetScreen(Screen):
         chart.size_hint = (1, 1)
         container.add_widget(chart)
 
-    def _generate_tips(self, statuses: list[dict]):
+    def _generate_tips(self, statuses):
         self.ids.tips_box.clear_widgets()
         tips_shown = 0
         for s in sorted(statuses, key=lambda x: x["spent"], reverse=True)[:3]:
@@ -324,11 +329,12 @@ class BudgetScreen(Screen):
                 halign="center", theme_text_color="Secondary", adaptive_height=True,
             ))
 
-    # ---------------------------------------------------------------- add budget
     def show_add_budget(self):
-        cat_field = MDTextField(hint_text="Category (e.g. Restaurants)", mode="rectangle")
+        cat_field = MDTextField(hint_text="Category (e.g. Restaurants)", mode="rectangle",
+                                size_hint_y=None, height=dp(56))
         amt_field = MDTextField(
-            hint_text="Monthly limit (CAD)", mode="rectangle", input_filter="float"
+            hint_text="Monthly limit (CAD)", mode="rectangle", input_filter="float",
+            size_hint_y=None, height=dp(56)
         )
         box = MDBoxLayout(
             orientation="vertical", spacing=dp(12),
@@ -364,3 +370,15 @@ class BudgetScreen(Screen):
             ],
         )
         self._dialog.open()
+
+
+class BudgetScreen(Screen):
+    def on_enter(self):
+        try:
+            self.children[0]._check_auto_copy()
+        except Exception:
+            pass
+
+
+# Alias for use as bottom nav tab content
+BudgetTab = BudgetContent

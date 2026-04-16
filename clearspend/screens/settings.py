@@ -157,6 +157,45 @@ KV = """
                     md_bg_color: app.theme_cls.primary_dark
                     elevation: 0
 
+            # ── AI Classification ────────────────────────────────────
+            MDLabel:
+                text: "AI AUTO-CLASSIFY"
+                font_style: "Overline"
+                theme_text_color: "Secondary"
+                adaptive_height: True
+                padding: [dp(4), dp(16), 0, dp(4)]
+
+            MDCard:
+                orientation: 'vertical'
+                padding: [dp(16), dp(12)]
+                size_hint_y: None
+                height: self.minimum_height
+                radius: [dp(10)]
+                spacing: dp(10)
+
+                MDLabel:
+                    text: "Auto-classifies transactions by description.\\nKeywords work offline. Gemini Flash adds accuracy when online (free tier)."
+                    font_style: "Caption"
+                    theme_text_color: "Secondary"
+                    adaptive_height: True
+
+                MDTextField:
+                    id: gemini_api_key_field
+                    hint_text: "Google Gemini API Key (aistudio.google.com - free)"
+                    mode: "rectangle"
+                    password: True
+                    size_hint_y: None
+                    height: dp(56)
+                    text: root.saved_gemini_api_key
+
+                MDRaisedButton:
+                    text: "SAVE GEMINI KEY"
+                    size_hint_y: None
+                    height: dp(42)
+                    on_release: root.save_gemini_api_key()
+                    md_bg_color: app.theme_cls.primary_dark
+                    elevation: 0
+
             # ── Data Management ──────────────────────────────────────
             MDLabel:
                 text: "DATA MANAGEMENT"
@@ -330,6 +369,7 @@ class SettingsTab(MDBoxLayout):
     saved_plaid_secret    = StringProperty("")
     saved_plaid_env       = StringProperty("sandbox")
     plaid_status_text     = StringProperty("Not configured.")
+    saved_gemini_api_key  = StringProperty("")
     show_dev_options      = BooleanProperty(False)
     _version_tap_count    = NumericProperty(0)
 
@@ -352,6 +392,9 @@ class SettingsTab(MDBoxLayout):
             self.saved_plaid_env       = data.get("environment", "sandbox")
             if self.saved_plaid_client_id:
                 self.plaid_status_text = f"Configured ({self.saved_plaid_env})"
+        if store.exists("gemini"):
+            data = store.get("gemini")
+            self.saved_gemini_api_key = data.get("api_key", "")
 
     def _update_connectivity(self, *_):
         app = self._get_app()
@@ -464,6 +507,17 @@ class SettingsTab(MDBoxLayout):
         if app:
             app.root.transition.direction = "left"
             app.root.current = "pin_auth"
+
+    # ---------------------------------------------------------------- gemini api key
+    def save_gemini_api_key(self):
+        api_key = self.ids.gemini_api_key_field.text.strip()
+        store = self._get_store()
+        store.put("gemini", api_key=api_key)
+        self.saved_gemini_api_key = api_key
+        if api_key:
+            Snackbar(text="Gemini API key saved. AI auto-classify active.").open()
+        else:
+            Snackbar(text="Gemini key cleared. Keyword-only mode active.").open()
 
     # ---------------------------------------------------------------- plaid credentials
     def save_plaid_credentials(self):

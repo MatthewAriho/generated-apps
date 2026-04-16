@@ -85,6 +85,8 @@ KV = """
                     mode: "rectangle"
                     size_hint_y: None
                     height: dp(56)
+                    on_text_validate: root.auto_classify_description()
+                    on_focus: if not self.focus and self.text: root.auto_classify_description()
 
                 # ── Date ──────────────────────────────────────────────────
                 MDTextField:
@@ -162,6 +164,43 @@ class AddTransactionScreen(Screen):
         self.ids.category_field.text = name
         if self._menu:
             self._menu.dismiss()
+
+    def auto_classify_description(self):
+        """Auto-fill category from description using keyword + Claude API."""
+        desc = self.ids.desc_field.text.strip()
+        if not desc:
+            return
+        # Don't override a manually chosen category
+        if self.selected_category:
+            return
+        from utils.classifier import classify_keyword
+        result = classify_keyword(desc)
+        if result:
+            self.selected_category = result
+            self.ids.category_field.text = result
+            return
+        # Try Claude API async - don't block UI
+        from kivy.clock import Clock
+        Clock.schedule_once(lambda *_: self._classify_via_api(desc), 0)
+
+    def _classify_via_api(self, desc: str):
+        """Background classification via Gemini API (non-blocking)."""
+        try:
+            from utils.classifier import classify_gemini, _get_gemini_api_key
+            api_key = _get_gemini_api_key()
+            if not api_key:
+                return
+            result = classify_gemini(desc, api_key)
+            if result and not self.selected_category:
+                from kivy.clock import Clock
+                Clock.schedule_once(lambda *_: self._set_auto_category(result), 0)
+        except Exception:
+            pass
+
+    def _set_auto_category(self, category: str):
+        if not self.selected_category:
+            self.selected_category = category
+            self.ids.category_field.text = category
 
     # ---------------------------------------------------------------- date
     def open_date_picker(self):

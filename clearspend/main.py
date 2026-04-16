@@ -23,8 +23,9 @@ from screens.edit_transaction  import EditTransactionScreen # noqa: F401
 from screens.transaction_list  import TransactionListTab    # noqa: F401
 from screens.bank_connect      import BankConnectTab        # noqa: F401
 from screens.settings          import SettingsTab           # noqa: F401
-from screens.trends            import TrendsScreen          # noqa: F401
-from screens.budget            import BudgetScreen          # noqa: F401
+from screens.trends            import TrendsScreen, TrendsTab  # noqa: F401
+from screens.budget            import BudgetScreen, BudgetTab  # noqa: F401
+from screens.goals             import GoalsTab              # noqa: F401
 from screens.pin_auth          import PinAuthScreen         # noqa: F401
 
 from utils.connectivity import is_online
@@ -78,6 +79,36 @@ ScreenManager:
 
                     BankConnectTab:
                         id: bank_tab
+
+                MDBottomNavigationItem:
+                    name: 'trends'
+                    text: 'Trends'
+                    icon: 'chart-line'
+                    font_size: "11sp"
+                    on_tab_press: app.refresh_trends()
+
+                    TrendsTab:
+                        id: trends_tab
+
+                MDBottomNavigationItem:
+                    name: 'budget'
+                    text: 'Budget'
+                    icon: 'wallet'
+                    font_size: "11sp"
+                    on_tab_press: app.refresh_budget()
+
+                    BudgetTab:
+                        id: budget_tab
+
+                MDBottomNavigationItem:
+                    name: 'goals'
+                    text: 'Goals'
+                    icon: 'flag-checkered'
+                    font_size: "11sp"
+                    on_tab_press: app.refresh_goals()
+
+                    GoalsTab:
+                        id: goals_tab
 
                 MDBottomNavigationItem:
                     name: 'settings'
@@ -139,6 +170,21 @@ class ClearSpendApp(MDApp):
     def on_start(self):
         from kivy.core.window import Window
         Window.bind(on_keyboard=self._on_keyboard)
+        # Android: also bind directly via the activity so back is never missed
+        self._bind_android_back()
+
+    def _bind_android_back(self):
+        """Bind Android's native back button via the activity if on Android."""
+        try:
+            from kivy.utils import platform
+            if platform != "android":
+                return
+            from jnius import autoclass
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            # Store ref so GC doesn't collect it
+            self._python_activity = PythonActivity
+        except Exception:
+            pass
 
     def on_resume(self):
         """Check for Plaid deep link + auto-lock on resume."""
@@ -240,24 +286,41 @@ class ClearSpendApp(MDApp):
         Clock.schedule_once(_do, 0.2)
 
     # ---------------------------------------------------------------- back button
+    def on_back_pressed(self):
+        """Called by Android native back button (KivyMD hook - most reliable)."""
+        return self._handle_back()
+
     def _on_keyboard(self, window, key, *args):
-        """Intercept Android hardware back button (key 27 / 1001)."""
+        """Intercept Android hardware back button (key 27 / 1001) - desktop fallback."""
         if key in (27, 1001):
             return self._handle_back()
         return False
 
     def _handle_back(self):
-        current = self.root.current
-        # On PIN screen or home, let the system handle (minimise / exit)
-        if current in ("pin_auth", "home"):
+        if self.root is None:
             return False
-        # Pop history if available
+        current = self.root.current
+        # On PIN screen, let system handle (exit app)
+        if current == "pin_auth":
+            return False
+        # On home screen with bottom nav: handle tab switching or exit
+        if current == "home":
+            try:
+                nav = self.root.ids.nav
+                active = nav.current
+                if active != "dashboard":
+                    # Switch back to dashboard tab first
+                    nav.switch_tab("dashboard")
+                    return True
+            except Exception:
+                pass
+            return False  # Let system minimise/exit from dashboard
+        # On any other screen: pop history or go home
         if self._screen_history:
             prev = self._screen_history.pop()
             self.root.transition.direction = "right"
             self.root.current = prev
             return True
-        # No history - fall back to home
         self.root.transition.direction = "right"
         self.root.current = "home"
         return True
@@ -303,14 +366,26 @@ class ClearSpendApp(MDApp):
             pass
 
     def go_to_trends(self):
-        self._push_history()
-        self.root.transition.direction = "left"
-        self.root.current = "trends"
+        try:
+            self.root.ids.nav.switch_tab("trends")
+        except Exception:
+            self._push_history()
+            self.root.transition.direction = "left"
+            self.root.current = "trends"
 
     def go_to_budget(self):
-        self._push_history()
-        self.root.transition.direction = "left"
-        self.root.current = "budget"
+        try:
+            self.root.ids.nav.switch_tab("budget")
+        except Exception:
+            self._push_history()
+            self.root.transition.direction = "left"
+            self.root.current = "budget"
+
+    def go_to_goals(self):
+        try:
+            self.root.ids.nav.switch_tab("goals")
+        except Exception:
+            pass
 
     # ---------------------------------------------------------------- plaid deep link
     def _check_plaid_intent(self):
@@ -377,6 +452,24 @@ class ClearSpendApp(MDApp):
     def refresh_bank(self, *_):
         try:
             self.root.ids.bank_tab.refresh()
+        except Exception:
+            pass
+
+    def refresh_trends(self, *_):
+        try:
+            self.root.ids.trends_tab.refresh()
+        except Exception:
+            pass
+
+    def refresh_budget(self, *_):
+        try:
+            self.root.ids.budget_tab.refresh()
+        except Exception:
+            pass
+
+    def refresh_goals(self, *_):
+        try:
+            self.root.ids.goals_tab.refresh()
         except Exception:
             pass
 

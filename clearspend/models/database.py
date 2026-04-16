@@ -74,6 +74,17 @@ class Database:
                 UNIQUE(month, category)
             );
 
+            CREATE TABLE IF NOT EXISTS goals (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                name      TEXT    NOT NULL,
+                target    REAL    NOT NULL,
+                saved     REAL    NOT NULL DEFAULT 0,
+                deadline  TEXT,
+                category  TEXT    DEFAULT 'Other',
+                completed INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS notifications_log (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 message    TEXT,
@@ -462,6 +473,48 @@ class Database:
         ]
         for cat, amt in budget_limits:
             self.set_budget(current_ym, cat, amt)
+
+    # --------------------------------------------------------- goals (V3)
+    def add_goal(
+        self,
+        name: str,
+        target: float,
+        saved: float = 0.0,
+        deadline: str | None = None,
+        category: str = "Other",
+    ) -> int:
+        cur = self.conn.execute(
+            """INSERT INTO goals(name, target, saved, deadline, category, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (name, target, saved, deadline, category, datetime.now().isoformat()),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def get_goals(self) -> list[dict]:
+        cur = self.conn.execute(
+            "SELECT * FROM goals ORDER BY completed ASC, created_at DESC"
+        )
+        return [dict(r) for r in cur]
+
+    def deposit_goal(self, goal_id: int, amount: float) -> dict | None:
+        """Add amount to a goal's saved total. Marks complete if target reached."""
+        cur = self.conn.execute("SELECT * FROM goals WHERE id = ?", (goal_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        new_saved = row["saved"] + amount
+        completed = 1 if new_saved >= row["target"] else 0
+        self.conn.execute(
+            "UPDATE goals SET saved = ?, completed = ? WHERE id = ?",
+            (new_saved, completed, goal_id),
+        )
+        self.conn.commit()
+        return dict(row) | {"saved": new_saved, "completed": completed}
+
+    def delete_goal(self, goal_id: int):
+        self.conn.execute("DELETE FROM goals WHERE id = ?", (goal_id,))
+        self.conn.commit()
 
     # --------------------------------------------------------- export / backup
     def export_to_dict(self) -> dict:

@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(///wsl.localhost/Ubuntu/home/matariho/generated-apps/**)",
+      "Bash(git add *)",
+      "Read(//home/matariho/generated-apps/clearspend/**)",
+      "Read(///wsl.localhost/Ubuntu/home/matariho/generated-apps/clearspend/**)",
+      "Read(//home/matariho/generated-apps/clearspend/models/**)",
+      "Read(///wsl.localhost/Ubuntu/home/matariho/generated-apps/clearspend/models/**)",
+      "Bash(git commit -m ' *)",
+      "Bash(git fetch *)",
+      "Bash(git merge *)",
+      "Bash(python3 -c \"from kivymd.uix.icon import MDIcon; print\\('ok'\\)\")"
+    ],
+    "additionalDirectories": [
+      "\\home\\matariho\\generated-apps\\clearspend",
+      "\\\\wsl.localhost\\Ubuntu\\home\\matariho\\generated-apps\\clearspend"
+    ]
+  }
+}
