@@ -252,7 +252,7 @@ KV = """
 
                 MDLabel:
                     id: version_label
-                    text: "Version 1.5 | Built with KivyMD"
+                    text: "Version 2.0 | Built with KivyMD"
                     font_style: "Caption"
                     theme_text_color: "Secondary"
                     adaptive_height: True

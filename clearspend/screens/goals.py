@@ -173,6 +173,12 @@ class GoalsTab(MDBoxLayout):
         Clock.schedule_once(self.refresh, 0.5)
 
     def refresh(self, *_):
+        try:
+            self._refresh_inner()
+        except Exception:
+            pass
+
+    def _refresh_inner(self):
         from models.database import Database
         db = Database.get()
         goals = db.get_goals()

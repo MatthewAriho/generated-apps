@@ -5,7 +5,7 @@ from datetime import datetime, date
 from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.metrics import dp
-from kivy.properties import StringProperty, BooleanProperty
+from kivy.properties import StringProperty, BooleanProperty, ListProperty
 from kivy.uix.screenmanager import Screen
 from kivymd.uix.card import MDCard
 from kivymd.uix.label import MDLabel
@@ -104,12 +104,7 @@ def _get_app():
 class TrendsContent(MDBoxLayout):
     period_label = StringProperty("")
     show_back = BooleanProperty(False)
-
-    @property
-    def back_items(self):
-        if self.show_back:
-            return [["arrow-left", lambda x: _get_app().go_back()]]
-        return []
+    back_items = ListProperty([])
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -118,12 +113,15 @@ class TrendsContent(MDBoxLayout):
         Clock.schedule_once(self.refresh, 0.4)
 
     def on_show_back(self, instance, value):
+        self.back_items = [["arrow-left", lambda x: _get_app().go_back()]] if value else []
+
+    def refresh(self, *_):
         try:
-            self.ids.top_bar.left_action_items = self.back_items
+            self._refresh_inner()
         except Exception:
             pass
 
-    def refresh(self, *_):
+    def _refresh_inner(self):
         from models.database import Database
         db = Database.get()
         ym = datetime.now().strftime("%Y-%m")

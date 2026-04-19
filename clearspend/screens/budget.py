@@ -5,7 +5,7 @@ from datetime import datetime, date
 from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.metrics import dp
-from kivy.properties import StringProperty, BooleanProperty
+from kivy.properties import StringProperty, BooleanProperty, ListProperty
 from kivy.uix.screenmanager import Screen
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.button import MDFlatButton, MDRaisedButton
@@ -129,12 +129,7 @@ class BudgetContent(MDBoxLayout):
     period_label  = StringProperty("")
     forecast_text = StringProperty("Set budgets to see your forecast.")
     show_back = BooleanProperty(False)
-
-    @property
-    def back_items(self):
-        if self.show_back:
-            return [["arrow-left", lambda x: _get_app().go_back()]]
-        return []
+    back_items = ListProperty([])
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -147,16 +142,19 @@ class BudgetContent(MDBoxLayout):
         Clock.schedule_once(self._check_auto_copy, 0.5)
 
     def on_show_back(self, instance, value):
-        try:
-            self.ids.top_bar.left_action_items = self.back_items
-        except Exception:
-            pass
+        self.back_items = [["arrow-left", lambda x: _get_app().go_back()]] if value else []
 
     def on_tab_press(self):
         """Called when this tab is pressed in bottom nav."""
         self._check_auto_copy()
 
     def _check_auto_copy(self, *_):
+        try:
+            self._check_auto_copy_inner()
+        except Exception:
+            pass
+
+    def _check_auto_copy_inner(self):
         from models.database import Database
         db  = Database.get()
         ym  = f"{self._year:04d}-{self._month:02d}"
@@ -201,6 +199,12 @@ class BudgetContent(MDBoxLayout):
         self._copy_dialog.open()
 
     def refresh(self, *_):
+        try:
+            self._refresh_inner()
+        except Exception:
+            pass
+
+    def _refresh_inner(self):
         from models.database import Database
         db  = Database.get()
         ym  = f"{self._year:04d}-{self._month:02d}"
@@ -252,11 +256,10 @@ class BudgetContent(MDBoxLayout):
         ))
         card.add_widget(sub)
 
-        bar = MDProgressBar(
-            value=min(pct_int, 100),
-            size_hint_y=None, height=dp(6),
-            color=(1, 0.35, 0.35, 1) if over else None,
-        )
+        bar_kwargs = dict(value=min(pct_int, 100), size_hint_y=None, height=dp(6))
+        if over:
+            bar_kwargs["color"] = (1, 0.35, 0.35, 1)
+        bar = MDProgressBar(**bar_kwargs)
         card.add_widget(bar)
         return card
 

@@ -23,8 +23,8 @@ from screens.edit_transaction  import EditTransactionScreen # noqa: F401
 from screens.transaction_list  import TransactionListTab    # noqa: F401
 from screens.bank_connect      import BankConnectTab        # noqa: F401
 from screens.settings          import SettingsTab           # noqa: F401
-from screens.trends            import TrendsScreen, TrendsTab  # noqa: F401
-from screens.budget            import BudgetScreen, BudgetTab  # noqa: F401
+from screens.trends            import TrendsTab               # noqa: F401
+from screens.budget            import BudgetTab               # noqa: F401
 from screens.goals             import GoalsTab              # noqa: F401
 from screens.pin_auth          import PinAuthScreen         # noqa: F401
 
@@ -125,12 +125,6 @@ ScreenManager:
     EditTransactionScreen:
         name: 'edit_transaction'
 
-    TrendsScreen:
-        name: 'trends'
-
-    BudgetScreen:
-        name: 'budget'
-
     PinAuthScreen:
         name: 'pin_auth'
 """
@@ -154,9 +148,14 @@ class ClearSpendApp(MDApp):
         self.theme_cls.theme_style   = "Dark"
         self.theme_cls.primary_palette = "Teal"
         self.title = "ClearSpend"
-        root = Builder.load_string(KV)
-        # Start on PIN screen
-        root.current = "pin_auth"
+        try:
+            root = Builder.load_string(KV)
+        except Exception as exc:
+            return self._crash_screen("KV build failed", exc)
+        try:
+            root.current = "pin_auth"
+        except Exception as exc:
+            return self._crash_screen("Screen switch failed", exc)
         # Init DB in background
         Clock.schedule_once(self._init_db, 0)
         # Check connectivity
@@ -166,6 +165,42 @@ class ClearSpendApp(MDApp):
         # Check for deep link intent on cold start
         Clock.schedule_once(lambda *_: self._check_plaid_intent(), 1.0)
         return root
+
+    def _crash_screen(self, phase, exc):
+        """Show exception on screen so it's readable without logcat."""
+        import traceback
+        from kivy.uix.boxlayout import BoxLayout
+        from kivy.uix.label import Label
+        from kivy.uix.scrollview import ScrollView
+        err = f"CRASH in {phase}:\n\n{traceback.format_exc()}"
+        self._write_crash_log(err)
+        sv = ScrollView()
+        lbl = Label(
+            text=err, halign="left", valign="top",
+            size_hint_y=None, font_size="11sp",
+            text_size=(340, None),
+        )
+        lbl.bind(texture_size=lbl.setter("size"))
+        sv.add_widget(lbl)
+        return sv
+
+    def _write_crash_log(self, text):
+        try:
+            import os
+            from kivy.utils import platform
+            if platform == "android":
+                try:
+                    from android.storage import app_storage_path
+                    base = app_storage_path()
+                except Exception:
+                    base = os.path.expanduser("~")
+            else:
+                base = os.path.join(os.path.expanduser("~"), ".clearspend")
+            os.makedirs(base, exist_ok=True)
+            with open(os.path.join(base, "crash_log.txt"), "w") as f:
+                f.write(text)
+        except Exception:
+            pass
 
     def on_start(self):
         from kivy.core.window import Window
