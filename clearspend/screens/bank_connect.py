@@ -236,7 +236,8 @@ class BankConnectTab(MDBoxLayout):
         return None
 
     def _start_plaid_link(self):
-        """Create a Link token and open Plaid Link in the device browser."""
+        """Create a Link token then open Plaid Link in an in-app WebView (Android)
+        or browser (desktop)."""
         creds = self._get_plaid_credentials()
         if not creds:
             Snackbar(text="Configure Plaid credentials in Settings first.").open()
@@ -244,43 +245,138 @@ class BankConnectTab(MDBoxLayout):
 
         Snackbar(text="Preparing bank login...").open()
 
-        def _do(*_):
+        import threading
+
+        def _bg():
+            self._plaid_log("background thread started")
             try:
                 from utils.bank_api import PlaidAPI
                 api = PlaidAPI(**creds)
-                resp = api.create_link_token(
-                    redirect_uri=PlaidAPI.REDIRECT_URI,
-                )
+                self._plaid_log("calling create_link_token")
+                resp = api.create_link_token()
                 link_token = resp.get("link_token", "")
+                self._plaid_log(f"link_token received, length={len(link_token)}")
                 if not link_token:
-                    Snackbar(text="Failed to create link token.").open()
+                    Clock.schedule_once(
+                        lambda *_: Snackbar(text="Plaid error: empty link_token.").open(), 0
+                    )
                     return
-
                 url = api.get_link_url(link_token)
-                self._open_browser(url)
-                Snackbar(text="Opening bank login in browser...").open()
+                self._plaid_log(f"launching UI with url length={len(url)}")
+                Clock.schedule_once(lambda *_, u=url: self._launch_plaid_ui(u), 0)
             except Exception as e:
-                Snackbar(text=f"Plaid error: {e}").open()
+                import traceback
+                msg = traceback.format_exc()
+                self._plaid_log(f"_bg EXCEPTION: {msg}")
+                err = str(e)
+                Clock.schedule_once(
+                    lambda *_, m=err: self._show_error_dialog("Plaid Link Failed", m), 0
+                )
 
-        Clock.schedule_once(_do, 0.3)
+        threading.Thread(target=_bg, daemon=True).start()
 
-    def _open_browser(self, url: str):
-        """Open a URL in the device browser."""
+    def _launch_plaid_ui(self, url: str):
+        """Main-thread: open in-app WebView on Android, browser on desktop."""
         from kivy.utils import platform as kp
         if kp == "android":
-            try:
-                from jnius import autoclass
-                Intent = autoclass("android.content.Intent")
-                Uri = autoclass("android.net.Uri")
-                PythonActivity = autoclass("org.kivy.android.PythonActivity")
-                intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                PythonActivity.mActivity.startActivity(intent)
-            except Exception:
-                import webbrowser
-                webbrowser.open(url)
+            self._open_plaid_webview(url)
         else:
             import webbrowser
             webbrowser.open(url)
+            Snackbar(text="Complete bank login in the browser.").open()
+
+    def _open_plaid_webview(self, url: str):
+        """Android: reset static state then start PlaidWebViewActivity.
+
+        Result is picked up in on_resume via check_plaid_webview_result()
+        because singleTask launchMode breaks startActivityForResult.
+        """
+        self._plaid_log(f"_open_plaid_webview called, url length={len(url)}")
+        try:
+            from jnius import autoclass
+            self._plaid_log("jnius imported")
+
+            Intent = autoclass("android.content.Intent")
+            self._plaid_log("Intent loaded")
+
+            PlaidWebViewActivity = autoclass(
+                "com.clearspend.clearspend.PlaidWebViewActivity"
+            )
+            self._plaid_log("PlaidWebViewActivity class loaded")
+
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            activity = PythonActivity.mActivity
+            self._plaid_log(f"PythonActivity loaded: {activity}")
+
+            PlaidWebViewActivity.completed = False
+            PlaidWebViewActivity.lastPublicToken = None
+            self._plaid_log("static fields reset")
+
+            intent = Intent(activity, PlaidWebViewActivity)
+            intent.putExtra("plaid_url", url)
+            self._plaid_log("intent created, calling startActivity")
+
+            activity.startActivity(intent)
+            self._plaid_log("startActivity called successfully")
+
+        except Exception as e:
+            import traceback
+            msg = traceback.format_exc()
+            self._plaid_log(f"EXCEPTION: {msg}")
+            self._show_error_dialog("Plaid WebView Error", str(e))
+
+    @staticmethod
+    def _plaid_log(msg: str):
+        """Write a timestamped line to plaid_debug.txt for on-device diagnosis."""
+        try:
+            import os, time
+            from kivy.utils import platform as kp
+            if kp == "android":
+                try:
+                    from android.storage import app_storage_path
+                    base = app_storage_path()
+                except Exception:
+                    base = os.path.expanduser("~")
+            else:
+                base = os.path.join(os.path.expanduser("~"), ".clearspend")
+            os.makedirs(base, exist_ok=True)
+            path = os.path.join(base, "plaid_debug.txt")
+            with open(path, "a") as f:
+                f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+        except Exception:
+            pass
+
+    def check_plaid_webview_result(self):
+        """Called from app on_resume. Picks up result left by PlaidWebViewActivity."""
+        try:
+            from jnius import autoclass
+            PlaidWebViewActivity = autoclass(
+                "com.clearspend.clearspend.PlaidWebViewActivity"
+            )
+            if not PlaidWebViewActivity.completed:
+                return
+            token = PlaidWebViewActivity.lastPublicToken
+            # Reset so we don't process it twice
+            PlaidWebViewActivity.completed = False
+            PlaidWebViewActivity.lastPublicToken = None
+
+            if token:
+                self._handle_plaid_callback(token)
+            else:
+                Snackbar(text="Bank login cancelled.").open()
+        except Exception:
+            pass
+
+    def _show_error_dialog(self, title: str, message: str):
+        """Show a scrollable error dialog (main thread only)."""
+        from kivymd.uix.dialog import MDDialog
+        from kivymd.uix.button import MDFlatButton
+        d = MDDialog(
+            title=title,
+            text=message,
+            buttons=[MDFlatButton(text="OK", on_release=lambda *_: d.dismiss())],
+        )
+        d.open()
 
     def _handle_plaid_callback(self, public_token: str):
         """Called when the app receives a Plaid redirect with a public_token."""
@@ -291,7 +387,9 @@ class BankConnectTab(MDBoxLayout):
 
         Snackbar(text="Connecting bank account...").open()
 
-        def _do(*_):
+        import threading
+
+        def _bg():
             try:
                 from utils.bank_api import PlaidAPI
                 from models.database import Database
@@ -311,14 +409,24 @@ class BankConnectTab(MDBoxLayout):
                             item_id=item_id,
                             environment=creds.get("environment", "sandbox"),
                         )
-                    Snackbar(text="Bank connected via Plaid!").open()
-                    self.refresh()
-                else:
-                    Snackbar(text=f"Connection failed: {result.get('error','')}").open()
-            except Exception as e:
-                Snackbar(text=f"Plaid error: {e}").open()
 
-        Clock.schedule_once(_do, 0.3)
+                    def _done(*_):
+                        Snackbar(text="Bank connected via Plaid!").open()
+                        self.refresh()
+
+                    Clock.schedule_once(_done, 0)
+                else:
+                    err = result.get("error", "")
+                    Clock.schedule_once(
+                        lambda *_, e=err: Snackbar(text=f"Connection failed: {e}").open(), 0
+                    )
+            except Exception as e:
+                err = str(e)
+                Clock.schedule_once(
+                    lambda *_, m=err: Snackbar(text=f"Plaid error: {m}").open(), 0
+                )
+
+        threading.Thread(target=_bg, daemon=True).start()
 
     def sandbox_test_connect(self):
         """Sandbox shortcut: skip browser, create test token directly."""
@@ -332,19 +440,28 @@ class BankConnectTab(MDBoxLayout):
 
         Snackbar(text="Creating sandbox connection...").open()
 
-        def _do(*_):
+        import threading
+
+        def _bg():
             try:
                 from utils.bank_api import PlaidAPI
                 api = PlaidAPI(**creds)
                 public_token = api.create_sandbox_token()
                 if public_token:
-                    self._handle_plaid_callback(public_token)
+                    Clock.schedule_once(
+                        lambda *_: self._handle_plaid_callback(public_token), 0
+                    )
                 else:
-                    Snackbar(text="Failed to create sandbox token.").open()
+                    Clock.schedule_once(
+                        lambda *_: Snackbar(text="Failed to create sandbox token.").open(), 0
+                    )
             except Exception as e:
-                Snackbar(text=f"Sandbox error: {e}").open()
+                err = str(e)
+                Clock.schedule_once(
+                    lambda *_, m=err: Snackbar(text=f"Sandbox error: {m}").open(), 0
+                )
 
-        Clock.schedule_once(_do, 0.3)
+        threading.Thread(target=_bg, daemon=True).start()
 
     # ---------------------------------------------------------------- mock OAuth
     def _mock_oauth_connect(self, bank_name: str, username: str, password: str):

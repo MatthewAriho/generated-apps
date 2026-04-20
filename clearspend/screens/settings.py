@@ -252,10 +252,11 @@ KV = """
 
                 MDLabel:
                     id: version_label
-                    text: "Version 2.0 | Built with KivyMD"
+                    text: "Version 2.4 | Built with KivyMD  (tap 5x for dev)"
                     font_style: "Caption"
                     theme_text_color: "Secondary"
-                    adaptive_height: True
+                    size_hint_y: None
+                    height: dp(44)
                     on_touch_down: if self.collide_point(*args[1].pos): root._on_version_tap()
 
                 MDLabel:
@@ -269,8 +270,8 @@ KV = """
                 id: dev_section
                 orientation: 'vertical'
                 size_hint_y: None
-                height: self.minimum_height if root.show_dev_options else 0
-                opacity: 1 if root.show_dev_options else 0
+                height: 0
+                opacity: 0
 
                 MDLabel:
                     text: "DEVELOPER"
@@ -355,6 +356,14 @@ KV = """
                         on_release: root.recheck_connectivity()
                         md_bg_color: app.theme_cls.primary_dark
                         elevation: 0
+
+                    MDRaisedButton:
+                        text: "SHOW PLAID DEBUG LOG"
+                        size_hint_y: None
+                        height: dp(40)
+                        on_release: root.show_plaid_log()
+                        md_bg_color: [0.3, 0.3, 0.3, 1]
+                        elevation: 0
 """
 
 Builder.load_string(KV)
@@ -390,8 +399,17 @@ class SettingsTab(MDBoxLayout):
             self.saved_plaid_client_id = data.get("client_id", "")
             self.saved_plaid_secret    = data.get("secret", "")
             self.saved_plaid_env       = data.get("environment", "sandbox")
-            if self.saved_plaid_client_id:
-                self.plaid_status_text = f"Configured ({self.saved_plaid_env})"
+        else:
+            # Seed default test credentials
+            self.saved_plaid_client_id = "69e46df110446b000de754e7"
+            self.saved_plaid_secret    = "ba37698ba137e2d901eb317d412d23"
+            self.saved_plaid_env       = "sandbox"
+            store.put("plaid",
+                      client_id="69e46df110446b000de754e7",
+                      secret="ba37698ba137e2d901eb317d412d23",
+                      environment="sandbox")
+        if self.saved_plaid_client_id:
+            self.plaid_status_text = f"Configured ({self.saved_plaid_env})"
         if store.exists("gemini"):
             data = store.get("gemini")
             self.saved_gemini_api_key = data.get("api_key", "")
@@ -409,6 +427,19 @@ class SettingsTab(MDBoxLayout):
         Snackbar(text="Checking connectivity...").open()
 
     # ---------------------------------------------------------------- 5-tap dev mode
+    def on_show_dev_options(self, instance, value):
+        from kivy.metrics import dp
+        try:
+            section = self.ids.dev_section
+            if value:
+                section.height = dp(500)
+                section.opacity = 1
+            else:
+                section.height = 0
+                section.opacity = 0
+        except Exception:
+            pass
+
     def _on_version_tap(self):
         self._version_tap_count += 1
         remaining = 5 - self._version_tap_count
@@ -540,6 +571,35 @@ class SettingsTab(MDBoxLayout):
         envs = ["sandbox", "development", "production"]
         idx = envs.index(self.saved_plaid_env) if self.saved_plaid_env in envs else 0
         self.saved_plaid_env = envs[(idx + 1) % len(envs)]
+
+    def show_plaid_log(self):
+        """Read and display plaid_debug.txt in a dialog."""
+        from kivymd.uix.dialog import MDDialog
+        from kivymd.uix.button import MDFlatButton
+        try:
+            if platform == "android":
+                try:
+                    from android.storage import app_storage_path
+                    base = app_storage_path()
+                except Exception:
+                    base = os.path.expanduser("~")
+            else:
+                base = os.path.join(os.path.expanduser("~"), ".clearspend")
+            path = os.path.join(base, "plaid_debug.txt")
+            if os.path.exists(path):
+                with open(path) as f:
+                    content = f.read()[-2000:]  # last 2000 chars
+            else:
+                content = f"Log file not found.\nExpected: {path}"
+        except Exception as e:
+            content = f"Error reading log: {e}"
+
+        d = MDDialog(
+            title="Plaid Debug Log",
+            text=content or "(empty)",
+            buttons=[MDFlatButton(text="OK", on_release=lambda *_: d.dismiss())],
+        )
+        d.open()
 
     # ---------------------------------------------------------------- demo mode
     def load_demo(self):

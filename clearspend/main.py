@@ -23,8 +23,8 @@ from screens.edit_transaction  import EditTransactionScreen # noqa: F401
 from screens.transaction_list  import TransactionListTab    # noqa: F401
 from screens.bank_connect      import BankConnectTab        # noqa: F401
 from screens.settings          import SettingsTab           # noqa: F401
-from screens.trends            import TrendsTab               # noqa: F401
-from screens.budget            import BudgetTab               # noqa: F401
+from screens.trends            import TrendsContent           # noqa: F401
+from screens.budget            import BudgetContent           # noqa: F401
 from screens.goals             import GoalsTab              # noqa: F401
 from screens.pin_auth          import PinAuthScreen         # noqa: F401
 
@@ -52,9 +52,8 @@ ScreenManager:
 
                 MDBottomNavigationItem:
                     name: 'dashboard'
-                    text: 'Home'
+                    text: ' '
                     icon: 'home'
-                    font_size: "11sp"
                     on_tab_press: app.refresh_dashboard()
 
                     DashboardTab:
@@ -62,9 +61,8 @@ ScreenManager:
 
                 MDBottomNavigationItem:
                     name: 'history'
-                    text: 'History'
+                    text: ' '
                     icon: 'history'
-                    font_size: "11sp"
                     on_tab_press: app.refresh_history()
 
                     TransactionListTab:
@@ -72,9 +70,8 @@ ScreenManager:
 
                 MDBottomNavigationItem:
                     name: 'bank'
-                    text: 'Bank'
+                    text: ' '
                     icon: 'bank'
-                    font_size: "11sp"
                     on_tab_press: app.refresh_bank()
 
                     BankConnectTab:
@@ -82,29 +79,26 @@ ScreenManager:
 
                 MDBottomNavigationItem:
                     name: 'trends'
-                    text: 'Trends'
+                    text: ' '
                     icon: 'chart-line'
-                    font_size: "11sp"
                     on_tab_press: app.refresh_trends()
 
-                    TrendsTab:
+                    TrendsContent:
                         id: trends_tab
 
                 MDBottomNavigationItem:
                     name: 'budget'
-                    text: 'Budget'
+                    text: ' '
                     icon: 'wallet'
-                    font_size: "11sp"
                     on_tab_press: app.refresh_budget()
 
-                    BudgetTab:
+                    BudgetContent:
                         id: budget_tab
 
                 MDBottomNavigationItem:
                     name: 'goals'
-                    text: 'Goals'
+                    text: ' '
                     icon: 'flag-checkered'
-                    font_size: "11sp"
                     on_tab_press: app.refresh_goals()
 
                     GoalsTab:
@@ -112,9 +106,8 @@ ScreenManager:
 
                 MDBottomNavigationItem:
                     name: 'settings'
-                    text: 'Settings'
+                    text: ' '
                     icon: 'cog'
-                    font_size: "11sp"
 
                     SettingsTab:
                         id: settings_tab
@@ -222,14 +215,22 @@ class ClearSpendApp(MDApp):
             pass
 
     def on_resume(self):
-        """Check for Plaid deep link + auto-lock on resume."""
+        """Check for Plaid deep link + WebView result + auto-lock on resume."""
         import time
         Clock.schedule_once(lambda *_: self._check_plaid_intent(), 0.5)
+        # Pick up result from PlaidWebViewActivity (singleTask workaround)
+        Clock.schedule_once(lambda *_: self._check_plaid_webview_result(), 0.3)
         # Auto-lock if idle too long
         if self._last_activity > 0:
             elapsed = time.time() - self._last_activity
             if elapsed > self.AUTO_LOCK_SECONDS:
                 self.root.current = "pin_auth"
+
+    def _check_plaid_webview_result(self):
+        try:
+            self.root.ids.bank_tab.check_plaid_webview_result()
+        except Exception:
+            pass
 
     def on_pause(self):
         """Record pause time for auto-lock calculation."""

@@ -149,22 +149,27 @@ class TrendsContent(MDBoxLayout):
                 orientation="horizontal",
                 padding=[dp(14), dp(10)],
                 size_hint_y=None,
-                height=dp(60),
+                height=dp(64),
                 radius=[dp(10)],
             )
-            left = MDBoxLayout(orientation="vertical", adaptive_height=True)
+            left = MDBoxLayout(orientation="vertical", adaptive_height=True, size_hint_x=1)
+            desc_label = MDLabel(
+                text=r["description"][:28], font_style="Body1", adaptive_height=True,
+                shorten=True, shorten_from="right",
+            )
+            left.add_widget(desc_label)
+            sub_text = f"Seen {r['month_count']} months | {r['category'][:18]}"
             left.add_widget(MDLabel(
-                text=r["description"][:30], font_style="Body1", adaptive_height=True,
-            ))
-            left.add_widget(MDLabel(
-                text=f"Seen {r['month_count']} months | {r['category']}",
+                text=sub_text,
                 font_style="Caption", theme_text_color="Secondary", adaptive_height=True,
+                shorten=True, shorten_from="right",
             ))
             card.add_widget(left)
             card.add_widget(MDLabel(
                 text=f"~${r['avg_amount']:,.2f}/mo",
                 halign="right", font_style="Subtitle2",
                 theme_text_color="Secondary",
+                size_hint_x=None, width=dp(100),
             ))
             self.ids.recurring_box.add_widget(card)
 

@@ -185,30 +185,28 @@ class PlaidAPI(BankAPI):
 
     def _post(self, endpoint: str, payload: dict) -> dict:
         """POST JSON to Plaid API. Returns parsed response dict."""
-        import json
-        from urllib.request import Request, urlopen
-        from urllib.error import HTTPError
+        import requests
 
         url = f"{self._base_url()}{endpoint}"
-        body = json.dumps(payload).encode("utf-8")
-        req = Request(url, data=body, method="POST")
-        req.add_header("Content-Type", "application/json")
-
         try:
-            with urlopen(req, timeout=15) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except HTTPError as e:
+            resp = requests.post(url, json=payload, timeout=15)
+        except requests.RequestException as e:
+            raise PlaidAPIError("NETWORK_ERROR", "REQUEST_FAILED", str(e))
+
+        if not resp.ok:
             try:
-                err = json.loads(e.read().decode("utf-8"))
+                err = resp.json()
                 raise PlaidAPIError(
                     err.get("error_type", "UNKNOWN"),
                     err.get("error_code", "UNKNOWN"),
-                    err.get("error_message", str(e)),
+                    err.get("error_message", resp.text),
                 )
-            except (json.JSONDecodeError, PlaidAPIError):
+            except (ValueError, PlaidAPIError):
                 raise
             except Exception:
-                raise PlaidAPIError("HTTP_ERROR", str(e.code), str(e))
+                raise PlaidAPIError("HTTP_ERROR", str(resp.status_code), resp.text)
+
+        return resp.json()
 
     def _auth_payload(self) -> dict:
         """Base payload with client credentials."""

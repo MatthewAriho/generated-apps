@@ -25,7 +25,7 @@ source.include_exts = py,png,jpg,kv,atlas,json
 #source.exclude_patterns = license,images/*/*.jpg
 
 # (str) Application versioning (method 1)
-version = 2.0
+version = 3.1
 
 # (list) Application requirements
 # All stdlib is included with python3. requests for bank API + cloud sync.
@@ -118,7 +118,10 @@ android.private_storage = True
 
 # (list) List of Java files to add to the android project (can be java or a
 # directory containing the files)
-#android.add_src =
+android.add_src = plaid_webview
+
+# (list) Extra activities to declare in AndroidManifest.xml
+android.add_activities = com.clearspend.clearspend.PlaidWebViewActivity
 
 # (list) Android AAR archives to add
 #android.add_aars =
@@ -128,7 +131,7 @@ android.private_storage = True
 #android.add_assets =
 
 # (list) Gradle dependencies to add
-android.gradle_dependencies = androidx.biometric:biometric:1.1.0
+android.gradle_dependencies = androidx.biometric:biometric:1.1.0,androidx.appcompat:appcompat:1.6.1
 
 # (bool) Enable AndroidX support. Enable when 'android.gradle_dependencies'
 # contains an 'androidx' package, or any package from Kotlin source.
