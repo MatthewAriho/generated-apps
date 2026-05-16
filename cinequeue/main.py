@@ -3142,14 +3142,18 @@ class SettingsScreen(MDScreen):
         for svc_key, svc_label in [('plex',      'Plex Media Server'),
                                     ('qbit_proj', 'VPN + qBittorrent'),
                                     ('arr_proj',  'Prowlarr / Sonarr / Radarr')]:
-            row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(4))
-            name_lbl = MDLabel(text=svc_label, font_size=dp(11),
+            wrapper = BoxLayout(orientation='vertical', size_hint_y=None,
+                                height=dp(64), spacing=dp(2),
+                                padding=[dp(4), dp(4), dp(4), 0])
+            name_lbl = MDLabel(text=svc_label, font_size=dp(13),
                                theme_text_color="Custom", text_color=TEXT,
-                               size_hint_x=0.34, halign='left', valign='middle')
+                               size_hint_y=None, height=dp(22),
+                               halign='left', valign='bottom')
             name_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
-            status_lbl = MDLabel(text="• unknown", font_size=dp(10),
+            ctrl_row = BoxLayout(size_hint_y=None, height=dp(36), spacing=dp(2))
+            status_lbl = MDLabel(text="• unknown", font_size=dp(11),
                                  theme_text_color="Custom", text_color=SUBTEXT,
-                                 size_hint_x=0.26, halign='left', valign='middle')
+                                 halign='left', valign='middle')
             status_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
             play_b = MDIconButton(icon="play",   theme_icon_color="Custom",
                                   icon_color=GREEN,   size_hint_x=None)
@@ -3161,12 +3165,13 @@ class SettingsScreen(MDScreen):
             play_b.bind(on_press=lambda *_, k=_key: self._svc_action(k, 'start'))
             stop_b.bind(on_press=lambda *_, k=_key: self._svc_action(k, 'stop'))
             ref_b.bind( on_press=lambda *_, k=_key: self._refresh_svc_status_single(k))
-            row.add_widget(name_lbl)
-            row.add_widget(status_lbl)
-            row.add_widget(play_b)
-            row.add_widget(stop_b)
-            row.add_widget(ref_b)
-            inner.add_widget(row)
+            ctrl_row.add_widget(status_lbl)
+            ctrl_row.add_widget(play_b)
+            ctrl_row.add_widget(stop_b)
+            ctrl_row.add_widget(ref_b)
+            wrapper.add_widget(name_lbl)
+            wrapper.add_widget(ctrl_row)
+            inner.add_widget(wrapper)
             self._svc_rows[svc_key] = {'status_lbl': status_lbl}
 
         refresh_all_btn = MDRaisedButton(
