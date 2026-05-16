@@ -3201,9 +3201,134 @@ class SettingsScreen(MDScreen):
         save_row.add_widget(Widget())
         inner.add_widget(save_row)
 
+        # Export / Import settings
+        inner.add_widget(SectionLabel(text="BACKUP & RESTORE"))
+
+        export_btn = MDRaisedButton(
+            text="Export Settings",
+            md_bg_color=CARD,
+            theme_text_color="Custom", text_color=ACCENT2,
+            size_hint=(None, None), height=dp(36),
+        )
+        export_btn.bind(on_press=self._export_settings)
+        export_row = BoxLayout(size_hint_y=None, height=dp(44))
+        export_row.add_widget(Widget())
+        export_row.add_widget(export_btn)
+        export_row.add_widget(Widget())
+        inner.add_widget(export_row)
+
+        export_hint = MDLabel(
+            text="Saves to /sdcard/Download/cinequeue_settings.json",
+            font_size=dp(9), theme_text_color="Custom", text_color=SUBTEXT,
+            size_hint_y=None, height=dp(18), halign='center', valign='middle')
+        export_hint.bind(size=lambda w, s: setattr(w, 'text_size', s))
+        inner.add_widget(export_hint)
+
+        self._import_path_inp = MDTextField(
+            hint_text="Import from file path",
+            helper_text="e.g. /sdcard/Download/cinequeue_settings.json",
+            helper_text_mode="on_focus",
+            mode="rectangle",
+            font_size=dp(12),
+            size_hint_y=None,
+            height=dp(46),
+            line_color_normal=(*SUBTEXT[:3], 0.5),
+            line_color_focus=ACCENT,
+            hint_text_color_normal=SUBTEXT,
+            text_color_normal=TEXT,
+        )
+        inner.add_widget(self._import_path_inp)
+
+        import_btn = MDRaisedButton(
+            text="Import Settings",
+            md_bg_color=CARD,
+            theme_text_color="Custom", text_color=GREEN,
+            size_hint=(None, None), height=dp(36),
+        )
+        import_btn.bind(on_press=self._import_settings)
+        import_row = BoxLayout(size_hint_y=None, height=dp(44))
+        import_row.add_widget(Widget())
+        import_row.add_widget(import_btn)
+        import_row.add_widget(Widget())
+        inner.add_widget(import_row)
+
         scroll.add_widget(inner)
         root.add_widget(scroll)
         self.add_widget(root)
+
+    def _ensure_storage_permission(self):
+        """Request MANAGE_EXTERNAL_STORAGE on Android 11+, legacy perms on older.
+        Returns True if permission is already granted (or not on Android)."""
+        try:
+            from android.permissions import Permission, check_permission, request_permissions
+            import android
+            if android.api_version >= 30:
+                # Android 11+: check MANAGE_EXTERNAL_STORAGE via Environment
+                from jnius import autoclass
+                Environment = autoclass('android.os.Environment')
+                if Environment.isExternalStorageManager():
+                    return True
+                # Redirect user to the all-files-access settings page
+                Intent = autoclass('android.content.Intent')
+                Uri = autoclass('android.net.Uri')
+                Settings = autoclass('android.provider.Settings')
+                PythonActivity = autoclass('org.kivy.android.PythonActivity')
+                intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                intent.setData(Uri.parse('package:org.cinequeue.cinequeue'))
+                PythonActivity.mActivity.startActivity(intent)
+                self.set_status("Grant 'All files access', then retry", ACCENT2)
+                return False
+            else:
+                # Android 10 and below
+                if not check_permission(Permission.READ_EXTERNAL_STORAGE):
+                    request_permissions([Permission.READ_EXTERNAL_STORAGE,
+                                         Permission.WRITE_EXTERNAL_STORAGE])
+                    self.set_status("Storage permission requested — retry", ACCENT2)
+                    return False
+                return True
+        except Exception:
+            # Not on Android, proceed
+            return True
+
+    def _export_settings(self, *_):
+        if not self._ensure_storage_permission():
+            return
+        try:
+            src = Settings._file()
+            if not os.path.exists(src):
+                self._autosave()
+            dst_dir = '/sdcard/Download'
+            if not os.path.isdir(dst_dir):
+                dst_dir = os.path.expanduser('~')
+            dst = os.path.join(dst_dir, 'cinequeue_settings.json')
+            import shutil
+            shutil.copy2(src, dst)
+            self.set_status(f"Exported to {dst}", GREEN)
+        except Exception as e:
+            self.set_status(f"Export failed: {e}", ACCENT)
+
+    def _import_settings(self, *_):
+        if not self._ensure_storage_permission():
+            return
+        path = self._import_path_inp.text.strip()
+        if not path:
+            path = '/sdcard/Download/cinequeue_settings.json'
+        try:
+            if not os.path.exists(path):
+                self.set_status(f"File not found: {path}", ACCENT)
+                return
+            with open(path) as fp:
+                data = json.load(fp)
+            if not isinstance(data, dict):
+                self.set_status("Invalid settings file", ACCENT)
+                return
+            Settings.save(data)
+            for key, inp in self._inputs.items():
+                val = data.get(key, '')
+                inp.text = val if val else ''
+            self.set_status("Settings imported — tap Save & Connect", GREEN)
+        except Exception as e:
+            self.set_status(f"Import failed: {e}", ACCENT)
 
     def _load_values(self):
         Settings.load()
