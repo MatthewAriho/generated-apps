@@ -2206,6 +2206,7 @@ class LoadingScreen(MDScreen):
                 pct = int(done[0] / len(missing) * 100)
                 Clock.schedule_once(lambda dt, p=pct, d=done[0], t=len(missing):
                     self._update_progress(p, d, t), 0)
+            MovieCache.save(_plex_movies, _lb_movies, _lb_stats)
             Clock.schedule_once(lambda dt: self._on_ready(), 0.3)
 
         threading.Thread(target=run, daemon=True).start()
