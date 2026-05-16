@@ -1899,7 +1899,8 @@ class MoviePosterCard(RelativeLayout):
             self._bg = Rectangle(pos=(0, 0), size=self.size)
         self.bind(size=self._upd_bg)
 
-        url = movie.get('poster_url')
+        local = movie.get('local_poster')
+        url = (local if local and os.path.exists(local) else None) or movie.get('poster_url')
         if url:
             self.add_widget(AsyncImage(
                 source=url, allow_stretch=True, keep_ratio=False,
