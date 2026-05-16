@@ -289,14 +289,37 @@ KV = """
                     spacing: dp(10)
 
                     MDLabel:
-                        text: "Plaid API credentials (dashboard.plaid.com)"
+                        text: "Plaid server proxy"
+                        font_style: "Caption"
+                        theme_text_color: "Secondary"
+                        adaptive_height: True
+
+                    MDTextField:
+                        id: plaid_server_url_field
+                        hint_text: "Server URL (https://...)"
+                        mode: "rectangle"
+                        size_hint_y: None
+                        height: dp(56)
+                        text: root.saved_plaid_server_url
+
+                    MDTextField:
+                        id: plaid_api_key_field
+                        hint_text: "API Key"
+                        mode: "rectangle"
+                        password: True
+                        size_hint_y: None
+                        height: dp(56)
+                        text: root.saved_plaid_api_key
+
+                    MDLabel:
+                        text: "Sandbox credentials (direct testing only)"
                         font_style: "Caption"
                         theme_text_color: "Secondary"
                         adaptive_height: True
 
                     MDTextField:
                         id: plaid_client_id_field
-                        hint_text: "Client ID"
+                        hint_text: "Client ID (sandbox)"
                         mode: "rectangle"
                         size_hint_y: None
                         height: dp(56)
@@ -304,37 +327,15 @@ KV = """
 
                     MDTextField:
                         id: plaid_secret_field
-                        hint_text: "Secret"
+                        hint_text: "Secret (sandbox)"
                         mode: "rectangle"
                         password: True
                         size_hint_y: None
                         height: dp(56)
                         text: root.saved_plaid_secret
 
-                    MDBoxLayout:
-                        size_hint_y: None
-                        height: dp(36)
-                        spacing: dp(4)
-
-                        MDLabel:
-                            text: "Environment:"
-                            font_style: "Caption"
-                            adaptive_height: True
-
-                        MDRaisedButton:
-                            id: plaid_env_btn
-                            text: root.saved_plaid_env.upper()
-                            size_hint_x: None
-                            width: dp(120)
-                            size_hint_y: None
-                            height: dp(36)
-                            font_size: "11sp"
-                            on_release: root.cycle_plaid_env()
-                            md_bg_color: app.theme_cls.primary_dark
-                            elevation: 0
-
                     MDRaisedButton:
-                        text: "SAVE PLAID CREDENTIALS"
+                        text: "SAVE PLAID SETTINGS"
                         size_hint_y: None
                         height: dp(42)
                         on_release: root.save_plaid_credentials()
@@ -374,10 +375,11 @@ class SettingsTab(MDBoxLayout):
     sync_status_text   = StringProperty("No backup yet this session.")
     saved_api_key      = StringProperty("")
     saved_bin_id       = StringProperty("")
-    saved_plaid_client_id = StringProperty("")
-    saved_plaid_secret    = StringProperty("")
-    saved_plaid_env       = StringProperty("sandbox")
-    plaid_status_text     = StringProperty("Not configured.")
+    saved_plaid_server_url = StringProperty("")
+    saved_plaid_api_key    = StringProperty("")
+    saved_plaid_client_id  = StringProperty("")
+    saved_plaid_secret     = StringProperty("")
+    plaid_status_text      = StringProperty("Not configured.")
     saved_gemini_api_key  = StringProperty("")
     show_dev_options      = BooleanProperty(False)
     _version_tap_count    = NumericProperty(0)
@@ -394,22 +396,20 @@ class SettingsTab(MDBoxLayout):
             data = store.get("cloud")
             self.saved_api_key = data.get("api_key", "")
             self.saved_bin_id  = data.get("bin_id", "")
-        if store.exists("plaid"):
+        if store.exists("plaid_server"):
+            data = store.get("plaid_server")
+            self.saved_plaid_server_url = data.get("url", "")
+            self.saved_plaid_api_key    = data.get("api_key", "")
+            self.saved_plaid_client_id  = data.get("client_id", "")
+            self.saved_plaid_secret     = data.get("secret", "")
+            if self.saved_plaid_server_url:
+                self.plaid_status_text = "Server configured"
+        elif store.exists("plaid"):
             data = store.get("plaid")
             self.saved_plaid_client_id = data.get("client_id", "")
             self.saved_plaid_secret    = data.get("secret", "")
-            self.saved_plaid_env       = data.get("environment", "sandbox")
-        else:
-            # Seed default test credentials
-            self.saved_plaid_client_id = "69e46df110446b000de754e7"
-            self.saved_plaid_secret    = "ba37698ba137e2d901eb317d412d23"
-            self.saved_plaid_env       = "sandbox"
-            store.put("plaid",
-                      client_id="69e46df110446b000de754e7",
-                      secret="ba37698ba137e2d901eb317d412d23",
-                      environment="sandbox")
-        if self.saved_plaid_client_id:
-            self.plaid_status_text = f"Configured ({self.saved_plaid_env})"
+            if self.saved_plaid_client_id:
+                self.plaid_status_text = "Sandbox only (no server)"
         if store.exists("gemini"):
             data = store.get("gemini")
             self.saved_gemini_api_key = data.get("api_key", "")
@@ -552,25 +552,27 @@ class SettingsTab(MDBoxLayout):
 
     # ---------------------------------------------------------------- plaid credentials
     def save_plaid_credentials(self):
+        server_url = self.ids.plaid_server_url_field.text.strip()
+        api_key = self.ids.plaid_api_key_field.text.strip()
         client_id = self.ids.plaid_client_id_field.text.strip()
         secret = self.ids.plaid_secret_field.text.strip()
-        env = self.saved_plaid_env
-
-        if not client_id or not secret:
-            Snackbar(text="Enter both Client ID and Secret.").open()
-            return
 
         store = self._get_store()
-        store.put("plaid", client_id=client_id, secret=secret, environment=env)
+        store.put("plaid_server",
+                  url=server_url, api_key=api_key,
+                  client_id=client_id, secret=secret)
+        self.saved_plaid_server_url = server_url
+        self.saved_plaid_api_key = api_key
         self.saved_plaid_client_id = client_id
         self.saved_plaid_secret = secret
-        self.plaid_status_text = f"Saved ({env})"
-        Snackbar(text="Plaid credentials saved.").open()
 
-    def cycle_plaid_env(self):
-        envs = ["sandbox", "development", "production"]
-        idx = envs.index(self.saved_plaid_env) if self.saved_plaid_env in envs else 0
-        self.saved_plaid_env = envs[(idx + 1) % len(envs)]
+        if server_url:
+            self.plaid_status_text = "Server configured"
+        elif client_id:
+            self.plaid_status_text = "Sandbox only (no server)"
+        else:
+            self.plaid_status_text = "Not configured"
+        Snackbar(text="Plaid settings saved.").open()
 
     def show_plaid_log(self):
         """Read and display plaid_debug.txt in a dialog."""

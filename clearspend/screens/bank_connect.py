@@ -1,6 +1,8 @@
 """Bank connect tab - connect accounts, mock OAuth flow, sync transactions."""
 from __future__ import annotations
 
+import threading
+
 from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.metrics import dp
@@ -208,8 +210,8 @@ class BankConnectTab(MDBoxLayout):
         self._dialog.open()
 
     # ---------------------------------------------------------------- plaid link
-    def _get_plaid_credentials(self) -> dict | None:
-        """Load Plaid credentials from JsonStore. Returns None if not configured."""
+    def _get_plaid_config(self) -> dict | None:
+        """Load Plaid server + sandbox config from JsonStore."""
         from kivy.storage.jsonstore import JsonStore
         import os
         from kivy.utils import platform as kp
@@ -223,177 +225,74 @@ class BankConnectTab(MDBoxLayout):
             base = os.path.join(os.path.expanduser("~"), ".clearspend")
         os.makedirs(base, exist_ok=True)
         store = JsonStore(os.path.join(base, "settings.json"))
+        if store.exists("plaid_server"):
+            data = store.get("plaid_server")
+            return {
+                "server_url": data.get("url", ""),
+                "api_key": data.get("api_key", ""),
+                "client_id": data.get("client_id", ""),
+                "secret": data.get("secret", ""),
+            }
         if store.exists("plaid"):
             data = store.get("plaid")
-            cid = data.get("client_id", "")
-            sec = data.get("secret", "")
-            if cid and sec:
-                return {
-                    "client_id": cid,
-                    "secret": sec,
-                    "environment": data.get("environment", "sandbox"),
-                }
+            return {
+                "server_url": "",
+                "api_key": "",
+                "client_id": data.get("client_id", ""),
+                "secret": data.get("secret", ""),
+            }
         return None
 
     def _start_plaid_link(self):
-        """Create a Link token then open Plaid Link in an in-app WebView (Android)
-        or browser (desktop)."""
-        creds = self._get_plaid_credentials()
-        if not creds:
-            Snackbar(text="Configure Plaid credentials in Settings first.").open()
+        """Create a Hosted Link token and open Plaid Link in the browser."""
+        cfg = self._get_plaid_config()
+        if not cfg or not cfg.get("server_url"):
+            Snackbar(text="Configure Plaid server URL in Settings first.").open()
             return
 
         Snackbar(text="Preparing bank login...").open()
 
-        import threading
-
-        def _bg():
-            self._plaid_log("background thread started")
+        def _do():
             try:
                 from utils.bank_api import PlaidAPI
-                api = PlaidAPI(**creds)
-                self._plaid_log("calling create_link_token")
+                api = PlaidAPI(**cfg)
                 resp = api.create_link_token()
-                link_token = resp.get("link_token", "")
-                self._plaid_log(f"link_token received, length={len(link_token)}")
-                if not link_token:
-                    Clock.schedule_once(
-                        lambda *_: Snackbar(text="Plaid error: empty link_token.").open(), 0
-                    )
+                url = resp.get("url", "")
+                if not url:
+                    Clock.schedule_once(lambda *_:
+                        Snackbar(text="Failed to create link token.").open(), 0)
                     return
-                url = api.get_link_url(link_token)
-                self._plaid_log(f"launching UI with url length={len(url)}")
-                Clock.schedule_once(lambda *_, u=url: self._launch_plaid_ui(u), 0)
+
+                Clock.schedule_once(lambda *_, u=url: (
+                    self._open_browser(u),
+                    Snackbar(text="Opening bank login in browser...").open()), 0)
             except Exception as e:
-                import traceback
-                msg = traceback.format_exc()
-                self._plaid_log(f"_bg EXCEPTION: {msg}")
-                err = str(e)
-                Clock.schedule_once(
-                    lambda *_, m=err: self._show_error_dialog("Plaid Link Failed", m), 0
-                )
+                msg = str(e)
+                Clock.schedule_once(lambda *_:
+                    Snackbar(text=f"Plaid error: {msg}").open(), 0)
 
-        threading.Thread(target=_bg, daemon=True).start()
-
-    def _launch_plaid_ui(self, url: str):
-        """Main-thread: open in-app WebView on Android, browser on desktop."""
-        from kivy.utils import platform as kp
-        if kp == "android":
-            self._open_plaid_webview(url)
-        else:
-            import webbrowser
-            webbrowser.open(url)
-            Snackbar(text="Complete bank login in the browser.").open()
-
-    def _open_plaid_webview(self, url: str):
-        """Android: reset static state then start PlaidWebViewActivity.
-
-        Result is picked up in on_resume via check_plaid_webview_result()
-        because singleTask launchMode breaks startActivityForResult.
-        """
-        self._plaid_log(f"_open_plaid_webview called, url length={len(url)}")
-        try:
-            from jnius import autoclass
-            self._plaid_log("jnius imported")
-
-            Intent = autoclass("android.content.Intent")
-            self._plaid_log("Intent loaded")
-
-            PlaidWebViewActivity = autoclass(
-                "com.clearspend.clearspend.PlaidWebViewActivity"
-            )
-            self._plaid_log("PlaidWebViewActivity class loaded")
-
-            PythonActivity = autoclass("org.kivy.android.PythonActivity")
-            activity = PythonActivity.mActivity
-            self._plaid_log(f"PythonActivity loaded: {activity}")
-
-            PlaidWebViewActivity.completed = False
-            PlaidWebViewActivity.lastPublicToken = None
-            self._plaid_log("static fields reset")
-
-            intent = Intent(activity, PlaidWebViewActivity)
-            intent.putExtra("plaid_url", url)
-            self._plaid_log("intent created, calling startActivity")
-
-            activity.startActivity(intent)
-            self._plaid_log("startActivity called successfully")
-
-        except Exception as e:
-            import traceback
-            msg = traceback.format_exc()
-            self._plaid_log(f"EXCEPTION: {msg}")
-            self._show_error_dialog("Plaid WebView Error", str(e))
+        threading.Thread(target=_do, daemon=True).start()
 
     @staticmethod
-    def _plaid_log(msg: str):
-        """Write a timestamped line to plaid_debug.txt for on-device diagnosis."""
-        try:
-            import os, time
-            from kivy.utils import platform as kp
-            if kp == "android":
-                try:
-                    from android.storage import app_storage_path
-                    base = app_storage_path()
-                except Exception:
-                    base = os.path.expanduser("~")
-            else:
-                base = os.path.join(os.path.expanduser("~"), ".clearspend")
-            os.makedirs(base, exist_ok=True)
-            path = os.path.join(base, "plaid_debug.txt")
-            with open(path, "a") as f:
-                f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
-        except Exception:
-            pass
-
-    def check_plaid_webview_result(self):
-        """Called from app on_resume. Picks up result left by PlaidWebViewActivity."""
-        try:
-            from jnius import autoclass
-            PlaidWebViewActivity = autoclass(
-                "com.clearspend.clearspend.PlaidWebViewActivity"
-            )
-            if not PlaidWebViewActivity.completed:
-                return
-            token = PlaidWebViewActivity.lastPublicToken
-            # Reset so we don't process it twice
-            PlaidWebViewActivity.completed = False
-            PlaidWebViewActivity.lastPublicToken = None
-
-            if token:
-                self._handle_plaid_callback(token)
-            else:
-                Snackbar(text="Bank login cancelled.").open()
-        except Exception:
-            pass
-
-    def _show_error_dialog(self, title: str, message: str):
-        """Show a scrollable error dialog (main thread only)."""
-        from kivymd.uix.dialog import MDDialog
-        from kivymd.uix.button import MDFlatButton
-        d = MDDialog(
-            title=title,
-            text=message,
-            buttons=[MDFlatButton(text="OK", on_release=lambda *_: d.dismiss())],
-        )
-        d.open()
+    def _open_browser(url: str):
+        """Open a URL in the system browser."""
+        import webbrowser
+        webbrowser.open(url)
 
     def _handle_plaid_callback(self, public_token: str):
         """Called when the app receives a Plaid redirect with a public_token."""
-        creds = self._get_plaid_credentials()
-        if not creds:
-            Snackbar(text="Plaid credentials missing.").open()
+        cfg = self._get_plaid_config()
+        if not cfg or not cfg.get("server_url"):
+            Snackbar(text="Plaid server not configured.").open()
             return
 
         Snackbar(text="Connecting bank account...").open()
 
-        import threading
-
-        def _bg():
+        def _do():
             try:
                 from utils.bank_api import PlaidAPI
                 from models.database import Database
-                api = PlaidAPI(**creds)
+                api = PlaidAPI(**cfg)
                 result = api.connect(public_token=public_token)
 
                 if result.get("success"):
@@ -407,61 +306,48 @@ class BankConnectTab(MDBoxLayout):
                             account_number_masked=acc.get("number", "****"),
                             access_token=access_token,
                             item_id=item_id,
-                            environment=creds.get("environment", "sandbox"),
+                            environment="plaid",
                         )
-
-                    def _done(*_):
-                        Snackbar(text="Bank connected via Plaid!").open()
-                        self.refresh()
-
-                    Clock.schedule_once(_done, 0)
+                    Clock.schedule_once(lambda *_: (
+                        Snackbar(text="Bank connected via Plaid!").open(),
+                        self.refresh()), 0)
                 else:
-                    err = result.get("error", "")
-                    Clock.schedule_once(
-                        lambda *_, e=err: Snackbar(text=f"Connection failed: {e}").open(), 0
-                    )
+                    err = result.get('error', '')
+                    Clock.schedule_once(lambda *_:
+                        Snackbar(text=f"Connection failed: {err}").open(), 0)
             except Exception as e:
-                err = str(e)
-                Clock.schedule_once(
-                    lambda *_, m=err: Snackbar(text=f"Plaid error: {m}").open(), 0
-                )
+                msg = str(e)
+                Clock.schedule_once(lambda *_:
+                    Snackbar(text=f"Plaid error: {msg}").open(), 0)
 
-        threading.Thread(target=_bg, daemon=True).start()
+        threading.Thread(target=_do, daemon=True).start()
 
     def sandbox_test_connect(self):
-        """Sandbox shortcut: skip browser, create test token directly."""
-        creds = self._get_plaid_credentials()
-        if not creds:
-            Snackbar(text="Configure Plaid credentials in Settings first.").open()
-            return
-        if creds.get("environment") != "sandbox":
-            Snackbar(text="Sandbox test only works in sandbox environment.").open()
+        """Sandbox shortcut: skip browser, create test token directly via Plaid."""
+        cfg = self._get_plaid_config()
+        if not cfg or not cfg.get("client_id") or not cfg.get("secret"):
+            Snackbar(text="Enter sandbox Client ID and Secret in Settings.").open()
             return
 
         Snackbar(text="Creating sandbox connection...").open()
 
-        import threading
-
-        def _bg():
+        def _do():
             try:
                 from utils.bank_api import PlaidAPI
-                api = PlaidAPI(**creds)
+                api = PlaidAPI(**cfg)
                 public_token = api.create_sandbox_token()
                 if public_token:
-                    Clock.schedule_once(
-                        lambda *_: self._handle_plaid_callback(public_token), 0
-                    )
+                    Clock.schedule_once(lambda *_:
+                        self._handle_plaid_callback(public_token), 0)
                 else:
-                    Clock.schedule_once(
-                        lambda *_: Snackbar(text="Failed to create sandbox token.").open(), 0
-                    )
+                    Clock.schedule_once(lambda *_:
+                        Snackbar(text="Failed to create sandbox token.").open(), 0)
             except Exception as e:
-                err = str(e)
-                Clock.schedule_once(
-                    lambda *_, m=err: Snackbar(text=f"Sandbox error: {m}").open(), 0
-                )
+                msg = str(e)
+                Clock.schedule_once(lambda *_:
+                    Snackbar(text=f"Sandbox error: {msg}").open(), 0)
 
-        threading.Thread(target=_bg, daemon=True).start()
+        threading.Thread(target=_do, daemon=True).start()
 
     # ---------------------------------------------------------------- mock OAuth
     def _mock_oauth_connect(self, bank_name: str, username: str, password: str):
@@ -508,71 +394,80 @@ class BankConnectTab(MDBoxLayout):
 
     def _sync_plaid(self, acc: dict, account_id: int):
         """Sync transactions for a Plaid-connected account using /transactions/sync."""
-        try:
-            from utils.bank_api import PlaidAPI
-            from models.database import Database
+        def _do():
+            try:
+                from utils.bank_api import PlaidAPI
+                from models.database import Database
 
-            creds = self._get_plaid_credentials()
-            if not creds:
-                Snackbar(text="Plaid credentials missing. Check Settings.").open()
-                return
+                cfg = self._get_plaid_config()
+                if not cfg or not cfg.get("server_url"):
+                    Clock.schedule_once(lambda *_:
+                        Snackbar(text="Plaid server not configured. Check Settings.").open(), 0)
+                    return
 
-            db = Database.get()
-            api = PlaidAPI(**creds)
-            cursor = db.get_plaid_cursor(account_id)
-            access_token = acc.get("access_token", "")
+                db = Database.get()
+                api = PlaidAPI(**cfg)
+                cursor = db.get_plaid_cursor(account_id)
+                access_token = acc.get("access_token", "")
 
-            result = api.get_transactions(
-                access_token=access_token,
-                cursor=cursor,
-            )
-
-            added = 0
-            for t in result.get("added", []):
-                ptid = t.get("plaid_transaction_id", "")
-                if ptid:
-                    existing = db.conn.execute(
-                        "SELECT id FROM transactions WHERE plaid_transaction_id = ?",
-                        (ptid,),
-                    ).fetchone()
-                    if existing:
-                        continue
-
-                db.add_transaction(
-                    amount=t["amount"],
-                    type_=t["type"],
-                    category=t.get("category", "Other"),
-                    description=t.get("description", ""),
-                    trans_date=t["date"],
-                    source="plaid",
-                    bank_account_id=account_id,
-                    plaid_transaction_id=t.get("plaid_transaction_id", ""),
+                result = api.get_transactions(
+                    access_token=access_token,
+                    cursor=cursor,
                 )
-                added += 1
 
-            removed_ids = result.get("removed", [])
-            if removed_ids:
-                db.delete_transactions_by_plaid_id(removed_ids)
+                added = 0
+                for t in result.get("added", []):
+                    ptid = t.get("plaid_transaction_id", "")
+                    if ptid:
+                        existing = db.conn.execute(
+                            "SELECT id FROM transactions WHERE plaid_transaction_id = ?",
+                            (ptid,),
+                        ).fetchone()
+                        if existing:
+                            continue
 
-            new_cursor = result.get("cursor", cursor)
-            if new_cursor:
-                db.set_plaid_cursor(account_id, new_cursor)
+                    db.add_transaction(
+                        amount=t["amount"],
+                        type_=t["type"],
+                        category=t.get("category", "Other"),
+                        description=t.get("description", ""),
+                        trans_date=t["date"],
+                        source="plaid",
+                        bank_account_id=account_id,
+                        plaid_transaction_id=t.get("plaid_transaction_id", ""),
+                    )
+                    added += 1
 
-            db.update_bank_sync_time(account_id)
-            self.refresh()
+                removed_ids = result.get("removed", [])
+                if removed_ids:
+                    db.delete_transactions_by_plaid_id(removed_ids)
 
-            app = self._get_app()
-            if app:
-                app.refresh_dashboard()
+                new_cursor = result.get("cursor", cursor)
+                if new_cursor:
+                    db.set_plaid_cursor(account_id, new_cursor)
 
-            removed_count = len(removed_ids)
-            msg = f"Synced {added} new"
-            if removed_count:
-                msg += f", {removed_count} removed"
-            Snackbar(text=msg + ".").open()
+                db.update_bank_sync_time(account_id)
 
-        except Exception as e:
-            Snackbar(text=f"Sync error: {e}").open()
+                removed_count = len(removed_ids)
+                msg = f"Synced {added} new"
+                if removed_count:
+                    msg += f", {removed_count} removed"
+
+                def _ui_done(*_):
+                    self.refresh()
+                    app = self._get_app()
+                    if app:
+                        app.refresh_dashboard()
+                    Snackbar(text=msg + ".").open()
+
+                Clock.schedule_once(_ui_done, 0)
+
+            except Exception as e:
+                emsg = str(e)
+                Clock.schedule_once(lambda *_:
+                    Snackbar(text=f"Sync error: {emsg}").open(), 0)
+
+        threading.Thread(target=_do, daemon=True).start()
 
     def _sync_mock(self, acc: dict, account_id: int):
         """Sync transactions for a mock (Scotiabank) account."""

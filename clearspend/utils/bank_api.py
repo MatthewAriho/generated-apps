@@ -159,195 +159,120 @@ class PlaidAPIError(Exception):
 
 
 class PlaidAPI(BankAPI):
-    """Plaid integration for connecting to US/CA bank accounts.
+    """Plaid integration via server proxy.
 
-    Supports sandbox, development, and production environments.
-    Uses the Plaid API v2 with /transactions/sync for incremental updates.
+    Non-sandbox calls go through a Flask proxy server that holds Plaid
+    credentials.  Sandbox test-connect still calls Plaid directly.
     """
 
-    ENVIRONMENTS = {
-        "sandbox":     "https://sandbox.plaid.com",
-        "development": "https://development.plaid.com",
-        "production":  "https://production.plaid.com",
-    }
+    SANDBOX_URL = "https://sandbox.plaid.com"
 
-    REDIRECT_URI = "clearspend://plaid-callback"
-
-    def __init__(self, client_id: str = "", secret: str = "",
+    def __init__(self, server_url: str = "", api_key: str = "",
+                 client_id: str = "", secret: str = "",
                  environment: str = "sandbox", **_):
+        self.server_url = server_url.rstrip("/") if server_url else ""
+        self.api_key = api_key
         self.client_id = client_id
         self.secret = secret
         self.environment = environment
         self._accounts: list[dict] = []
 
-    def _base_url(self) -> str:
-        return self.ENVIRONMENTS.get(self.environment, self.ENVIRONMENTS["sandbox"])
+    # ---- server proxy helpers ----
 
-    def _post(self, endpoint: str, payload: dict) -> dict:
-        """POST JSON to Plaid API. Returns parsed response dict."""
-        import requests
+    def _server_post(self, path: str, payload: dict | None = None) -> dict:
+        import json
+        from urllib.request import Request, urlopen
+        from urllib.error import HTTPError
 
-        url = f"{self._base_url()}{endpoint}"
+        url = f"{self.server_url}{path}"
+        body = json.dumps(payload or {}).encode()
+        req = Request(url, data=body, method="POST")
+        req.add_header("Content-Type", "application/json")
+        if self.api_key:
+            req.add_header("X-API-Key", self.api_key)
         try:
-            resp = requests.post(url, json=payload, timeout=15)
-        except requests.RequestException as e:
-            raise PlaidAPIError("NETWORK_ERROR", "REQUEST_FAILED", str(e))
-
-        if not resp.ok:
+            with urlopen(req, timeout=20) as resp:
+                return json.loads(resp.read())
+        except HTTPError as e:
             try:
-                err = resp.json()
+                err = json.loads(e.read())
+                msg = err.get("description", err.get("error", str(e)))
+            except Exception:
+                msg = str(e)
+            raise PlaidAPIError("SERVER", str(getattr(e, "code", 0)), msg)
+
+    def _plaid_post(self, endpoint: str, payload: dict) -> dict:
+        """Direct Plaid call (sandbox only)."""
+        import json
+        from urllib.request import Request, urlopen
+        from urllib.error import HTTPError
+
+        url = f"{self.SANDBOX_URL}{endpoint}"
+        body = json.dumps(payload).encode()
+        req = Request(url, data=body, method="POST")
+        req.add_header("Content-Type", "application/json")
+        try:
+            with urlopen(req, timeout=15) as resp:
+                return json.loads(resp.read())
+        except HTTPError as e:
+            try:
+                err = json.loads(e.read())
                 raise PlaidAPIError(
                     err.get("error_type", "UNKNOWN"),
                     err.get("error_code", "UNKNOWN"),
-                    err.get("error_message", resp.text),
+                    err.get("error_message", str(e)),
                 )
-            except (ValueError, PlaidAPIError):
+            except PlaidAPIError:
                 raise
             except Exception:
-                raise PlaidAPIError("HTTP_ERROR", str(resp.status_code), resp.text)
+                raise PlaidAPIError("HTTP_ERROR", str(getattr(e, "code", 0)), str(e))
 
-        return resp.json()
+    # ---- Link flow (via server) ----
 
-    def _auth_payload(self) -> dict:
-        """Base payload with client credentials."""
-        return {"client_id": self.client_id, "secret": self.secret}
+    def create_link_token(self) -> dict:
+        """Ask server to create a Hosted Link token. Returns { url }."""
+        return self._server_post("/api/link-token")
 
-    # ---------------------------------------------------------------- Link flow
-    def create_link_token(self, user_id: str = "clearspend_user",
-                          redirect_uri: str = "") -> dict:
-        """Create a Link token for opening Plaid Link in browser."""
-        payload = {
-            **self._auth_payload(),
-            "user": {"client_user_id": user_id},
-            "client_name": "ClearSpend",
-            "products": ["transactions"],
-            "country_codes": ["US", "CA"],
-            "language": "en",
-        }
-        if redirect_uri:
-            payload["redirect_uri"] = redirect_uri
-        return self._post("/link/token/create", payload)
+    # ---- BankAPI interface (via server) ----
 
-    def exchange_public_token(self, public_token: str) -> dict:
-        """Exchange a public_token from Link for a permanent access_token."""
-        payload = {**self._auth_payload(), "public_token": public_token}
-        return self._post("/item/public_token/exchange", payload)
-
-    # ---------------------------------------------------------------- Sandbox helper
-    def create_sandbox_token(self, institution_id: str = "ins_109508") -> str:
-        """Sandbox only: create a public_token without the Link UI.
-        Default institution is First Platypus Bank (Plaid sandbox)."""
-        payload = {
-            **self._auth_payload(),
-            "institution_id": institution_id,
-            "initial_products": ["transactions"],
-        }
-        resp = self._post("/sandbox/public_token/create", payload)
-        return resp.get("public_token", "")
-
-    # ---------------------------------------------------------------- BankAPI interface
     def connect(self, public_token: str = "", **_) -> dict:
-        """Exchange public_token, fetch accounts, return normalized result."""
+        """Exchange public_token via server proxy."""
         if not public_token:
             return {"success": False, "error": "No public_token provided."}
         try:
-            exchange = self.exchange_public_token(public_token)
-            access_token = exchange.get("access_token", "")
-            item_id = exchange.get("item_id", "")
-
-            accounts = self.get_accounts(access_token=access_token)
-            return {
-                "success": True,
-                "accounts": accounts,
-                "access_token": access_token,
-                "item_id": item_id,
-            }
-        except PlaidAPIError as e:
-            return {"success": False, "error": str(e)}
+            return self._server_post("/api/exchange-token", {
+                "public_token": public_token,
+            })
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def get_accounts(self, access_token: str = "", **_) -> list[dict]:
-        """Fetch accounts for the given access_token."""
-        payload = {**self._auth_payload(), "access_token": access_token}
-        resp = self._post("/accounts/get", payload)
-        accounts = []
-        for acc in resp.get("accounts", []):
-            mask = acc.get("mask", "****")
-            accounts.append({
-                "id": acc.get("account_id", ""),
-                "name": acc.get("name", "Account"),
-                "number": f"****{mask}" if mask else "****",
-                "balance": acc.get("balances", {}).get("current", 0.0),
-                "type": acc.get("subtype", acc.get("type", "checking")),
-                "currency": acc.get("balances", {}).get("iso_currency_code", "CAD"),
-            })
-        self._accounts = accounts
-        return accounts
-
-    def get_transactions(self, account_id: str = "", from_date: str | None = None,
-                         access_token: str = "", cursor: str = "",
+    def get_transactions(self, access_token: str = "", cursor: str = "",
                          **_) -> dict:
-        """Fetch transactions via /transactions/sync (incremental).
+        """Fetch transactions via server proxy. Server handles pagination.
+        Returns dict with added (list), removed (list), cursor (str)."""
+        resp = self._server_post("/api/transactions-sync", {
+            "access_token": access_token,
+            "cursor": cursor,
+        })
+        for t in resp.get("added", []):
+            plaid_cat = t.get("category", "Other")
+            t["category"] = _MAP_PLAID_CATEGORY.get(plaid_cat, plaid_cat)
+            t.setdefault("source", "plaid")
+            t.setdefault("bank_account_id", None)
+        return resp
 
-        Returns dict with keys: added (list[dict]), removed (list[str]),
-        cursor (str), has_more (bool).
-        """
-        all_added: list[dict] = []
-        all_removed: list[str] = []
-        current_cursor = cursor
-        has_more = True
+    # ---- Sandbox (direct Plaid call) ----
 
-        while has_more:
-            payload = {
-                **self._auth_payload(),
-                "access_token": access_token,
-                "cursor": current_cursor,
-                "count": 100,
-            }
-            resp = self._post("/transactions/sync", payload)
-
-            for t in resp.get("added", []):
-                # Plaid: amount > 0 = debit (expense), amount < 0 = credit (income)
-                raw_amount = t.get("amount", 0)
-                tx_type = "expense" if raw_amount > 0 else "income"
-                amount = abs(raw_amount)
-
-                # Map Plaid category to app category
-                pfc = t.get("personal_finance_category", {})
-                plaid_cat = pfc.get("primary", "")
-                app_cat = _MAP_PLAID_CATEGORY.get(plaid_cat, "Other")
-
-                all_added.append({
-                    "description": (t.get("name") or t.get("merchant_name") or "")[:100],
-                    "category": app_cat,
-                    "amount": round(amount, 2),
-                    "type": tx_type,
-                    "date": t.get("date", ""),
-                    "source": "plaid",
-                    "bank_account_id": None,
-                    "plaid_transaction_id": t.get("transaction_id", ""),
-                })
-
-            for t in resp.get("removed", []):
-                tid = t.get("transaction_id", "")
-                if tid:
-                    all_removed.append(tid)
-
-            current_cursor = resp.get("next_cursor", current_cursor)
-            has_more = resp.get("has_more", False)
-
-        return {
-            "added": all_added,
-            "removed": all_removed,
-            "cursor": current_cursor,
-            "has_more": False,
+    def create_sandbox_token(self, institution_id: str = "ins_109508") -> str:
+        """Sandbox only: create a public_token without the Link UI."""
+        payload = {
+            "client_id": self.client_id,
+            "secret": self.secret,
+            "institution_id": institution_id,
+            "initial_products": ["transactions"],
         }
-
-    def get_link_url(self, link_token: str) -> str:
-        """Build the Plaid Link URL to open in a browser."""
-        base = "https://cdn.plaid.com/link/v2/stable/link.html"
-        return f"{base}?isWebview=true&token={link_token}"
+        resp = self._plaid_post("/sandbox/public_token/create", payload)
+        return resp.get("public_token", "")
 
 
 # ---------------------------------------------------------------------------

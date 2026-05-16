@@ -135,6 +135,7 @@ class ClearSpendApp(MDApp):
         self._load_cloud_credentials()
         self._last_activity = 0
         self._screen_history = []
+        self._last_plaid_token = None
 
     # ---------------------------------------------------------------- kivy
     def build(self):
@@ -157,6 +158,15 @@ class ClearSpendApp(MDApp):
         Clock.schedule_interval(self._check_spend_alert, 1800)
         # Check for deep link intent on cold start
         Clock.schedule_once(lambda *_: self._check_plaid_intent(), 1.0)
+        # Bind on_new_intent for warm-start deep links (app already running)
+        try:
+            from android.activity import bind as android_bind
+            app_ref = self
+            def _plaid_intent_handler(intent):
+                app_ref._handle_plaid_intent(intent)
+            android_bind(on_new_intent=_plaid_intent_handler)
+        except Exception:
+            pass
         return root
 
     def _crash_screen(self, phase, exc):
@@ -425,32 +435,47 @@ class ClearSpendApp(MDApp):
 
     # ---------------------------------------------------------------- plaid deep link
     def _check_plaid_intent(self):
-        """Check if the app was opened via clearspend://plaid-callback deep link."""
+        """Cold-start / resume wrapper: read getIntent() and forward."""
         from kivy.utils import platform
         if platform != "android":
             return
         try:
             from jnius import autoclass
-            PythonActivity = autoclass("org.kivy.android.PythonActivity")
-            activity = PythonActivity.mActivity
-            intent = activity.getIntent()
+            intent = autoclass("org.kivy.android.PythonActivity").mActivity.getIntent()
+            self._handle_plaid_intent(intent)
+        except Exception:
+            pass
+
+    def _handle_plaid_intent(self, intent):
+        """Shared handler for both cold-start and on_new_intent paths."""
+        code = None
+        try:
             if intent is None:
                 return
             uri = intent.getData()
-            if uri is None:
+            if uri is None or str(uri.getScheme() or "") != "clearspend":
                 return
-            scheme = str(uri.getScheme() or "")
-            host = str(uri.getHost() or "")
-            if scheme == "clearspend" and host == "plaid-callback":
-                public_token = str(uri.getQueryParameter("public_token") or "")
-                if public_token:
-                    # Clear intent data to prevent re-processing
-                    intent.setData(None)
-                    Clock.schedule_once(
-                        lambda *_: self._process_plaid_token(public_token), 0.3
-                    )
+            if str(uri.getHost() or "") != "plaid-callback":
+                return
+            code = str(uri.getQueryParameter("public_token") or "")
+        except Exception:
+            return
+
+        if not code:
+            return
+
+        if code == self._last_plaid_token:
+            return
+        self._last_plaid_token = code
+
+        try:
+            intent.setData(None)
+            from jnius import autoclass
+            autoclass("org.kivy.android.PythonActivity").mActivity.setIntent(intent)
         except Exception:
             pass
+
+        Clock.schedule_once(lambda *_: self._process_plaid_token(code), 0.3)
 
     def _process_plaid_token(self, public_token: str):
         """Route the Plaid public_token to BankConnectTab for processing."""
