@@ -187,7 +187,8 @@ class MovieCache:
     """Persists movie data across launches to avoid re-fetching everything."""
     _path = None
     _TMDB_FIELDS = ('poster_url', 'poster_color', 'director', 'runtime',
-                    'genre', 'country', 'year', 'local_poster')
+                    'genre', 'country', 'year', 'local_poster',
+                    'tmdb_enriched')
     _EMPTY_VALS  = (None, '', 'Unknown', '?', 0)
 
     @classmethod
@@ -1481,7 +1482,7 @@ class PosterCache:
 
 def fetch_tmdb_enrich_async(movies, api_key, on_done):
     """Enrich movies using TMDB: fills poster, runtime, genre, director, country, year.
-    Downloads poster images to local storage. After enrichment, filters bad data."""
+    Downloads poster images to local storage. Skips already-enriched movies."""
     def run():
         search  = "https://api.themoviedb.org/3/search/movie"
         detail  = "https://api.themoviedb.org/3/movie"
@@ -1489,6 +1490,10 @@ def fetch_tmdb_enrich_async(movies, api_key, on_done):
 
         _ctx = ssl._create_unverified_context()
         for m in movies:
+            if m.get('tmdb_enriched'):
+                PosterCache.ensure(m, _ctx)
+                continue
+
             needs = (
                 not m.get('poster_url') or
                 m.get('runtime', 0) < 1 or
@@ -1497,7 +1502,7 @@ def fetch_tmdb_enrich_async(movies, api_key, on_done):
                 not m.get('year')
             )
             if not needs:
-                # Metadata complete — still ensure poster is downloaded locally
+                m['tmdb_enriched'] = True
                 PosterCache.ensure(m, _ctx)
                 continue
 
@@ -1510,6 +1515,7 @@ def fetch_tmdb_enrich_async(movies, api_key, on_done):
                     results = json.loads(r.read()).get('results', [])
 
                 if not results:
+                    m['tmdb_enriched'] = True
                     continue
 
                 top = results[0]
@@ -1548,16 +1554,12 @@ def fetch_tmdb_enrich_async(movies, api_key, on_done):
                             raw = pcs[0].get('name', '')
                             m['country'] = _TMDB_COUNTRY.get(raw, raw[:2].upper() if raw else '?')
 
-                # Download poster locally now that we have the URL
                 PosterCache.ensure(m, _ctx)
 
             except Exception:
                 pass
 
-        # Filter bad data out of global lists
-        global _plex_movies, _lb_movies
-        _plex_movies = [m for m in _plex_movies if not _is_bad_movie(m)]
-        _lb_movies   = [m for m in _lb_movies   if not _is_bad_movie(m)]
+            m['tmdb_enriched'] = True
 
         Clock.schedule_once(lambda dt: on_done(), 0)
 
@@ -2179,20 +2181,27 @@ class LoadingScreen(MDScreen):
             Clock.schedule_once(lambda dt: self._on_ready(), 0.3)
             return
 
-        # Show Skip button now that data is loaded
+        missing = [m for m in movies
+                   if not (m.get('local_poster') and os.path.exists(m['local_poster']))]
+
+        if not missing:
+            self._log("All posters cached.")
+            Clock.schedule_once(lambda dt: self._on_ready(), 0.2)
+            return
+
         self._skip_btn.opacity = 1
         self._skip_btn.disabled = False
+        self._log(f"Downloading {len(missing)} poster(s)…")
 
         done = [0]
 
         def run():
             ctx = ssl._create_unverified_context()
-            for m in movies:
-                if not (m.get('local_poster') and os.path.exists(m['local_poster'])):
-                    PosterCache.ensure(m, ctx)
+            for m in missing:
+                PosterCache.ensure(m, ctx)
                 done[0] += 1
-                pct = int(done[0] / total * 100)
-                Clock.schedule_once(lambda dt, p=pct, d=done[0], t=total:
+                pct = int(done[0] / len(missing) * 100)
+                Clock.schedule_once(lambda dt, p=pct, d=done[0], t=len(missing):
                     self._update_progress(p, d, t), 0)
             Clock.schedule_once(lambda dt: self._on_ready(), 0.3)
 
