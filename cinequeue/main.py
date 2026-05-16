@@ -1491,7 +1491,8 @@ def fetch_tmdb_enrich_async(movies, api_key, on_done):
         _ctx = ssl._create_unverified_context()
         for m in movies:
             if m.get('tmdb_enriched'):
-                PosterCache.ensure(m, _ctx)
+                if not (m.get('local_poster') and os.path.exists(m['local_poster'])):
+                    PosterCache.ensure(m, _ctx)
                 continue
 
             needs = (
@@ -1503,7 +1504,8 @@ def fetch_tmdb_enrich_async(movies, api_key, on_done):
             )
             if not needs:
                 m['tmdb_enriched'] = True
-                PosterCache.ensure(m, _ctx)
+                if not (m.get('local_poster') and os.path.exists(m['local_poster'])):
+                    PosterCache.ensure(m, _ctx)
                 continue
 
             try:
@@ -3552,8 +3554,11 @@ class SettingsScreen(MDScreen):
         self.set_status("Connecting to Plex…")
         def on_done(movies):
             global _plex_movies
-            _plex_movies = movies
-            self.set_status(f"Plex: {len(movies)} movies loaded", GREEN)
+            merged, new = MovieCache.merge(_plex_movies, movies)
+            _plex_movies = merged
+            _find_intersection(_plex_movies, _lb_movies)
+            MovieCache.save(_plex_movies, _lb_movies, _lb_stats)
+            self.set_status(f"Plex: {len(merged)} movies (+{len(new)} new)", GREEN)
             _notify_refresh()
         def on_err(e):
             self.set_status(f"Plex error: {e}", ACCENT)
@@ -3563,8 +3568,11 @@ class SettingsScreen(MDScreen):
         self.set_status("Loading Letterboxd watchlist…")
         def on_done(movies):
             global _lb_movies
-            _lb_movies = movies
-            self.set_status(f"Letterboxd: {len(movies)} movies loaded", GREEN)
+            merged, new = MovieCache.merge(_lb_movies, movies)
+            _lb_movies = merged
+            _find_intersection(_plex_movies, _lb_movies)
+            MovieCache.save(_plex_movies, _lb_movies, _lb_stats)
+            self.set_status(f"Letterboxd: {len(merged)} movies (+{len(new)} new)", GREEN)
             _notify_refresh()
         def on_err(e):
             self.set_status(f"Letterboxd error: {e}", ACCENT)
@@ -3572,7 +3580,8 @@ class SettingsScreen(MDScreen):
 
     def _fetch_tmdb_posters(self, api_key):
         all_movies = _plex_movies + _lb_movies
-        missing = [m for m in all_movies if not m.get('poster_url')]
+        missing = [m for m in all_movies
+                   if not m.get('tmdb_enriched') and not m.get('poster_url')]
         if not missing:
             return
         self.set_status(f"Fetching {len(missing)} posters from TMDB…")
@@ -3883,14 +3892,16 @@ class CineQueueApp(MDApp):
     def _on_bg_sync_done(self, changed=False):
         if changed:
             _notify_refresh()
-            # Fetch posters for any newly synced movies in background
-            def _fetch_new():
-                ctx = ssl._create_unverified_context()
-                for m in list(_plex_movies + _lb_movies):
-                    if m.get('poster_url') and not (
-                            m.get('local_poster') and os.path.exists(m['local_poster'])):
+            missing = [m for m in list(_plex_movies + _lb_movies)
+                       if m.get('poster_url') and not (
+                           m.get('local_poster') and os.path.exists(m['local_poster']))]
+            if missing:
+                def _fetch_new():
+                    ctx = ssl._create_unverified_context()
+                    for m in missing:
                         PosterCache.ensure(m, ctx)
-            threading.Thread(target=_fetch_new, daemon=True).start()
+                    MovieCache.save(_plex_movies, _lb_movies, _lb_stats)
+                threading.Thread(target=_fetch_new, daemon=True).start()
         if not self._refresh_timer:
             self._start_refresh_timer()
 
