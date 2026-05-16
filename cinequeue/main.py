@@ -2069,15 +2069,21 @@ class LoadingScreen(MDScreen):
     def start(self, plex_url, plex_token, lb_username, tmdb_key, cached_plex=None, cached_lb=None):
         """Fetch fresh data. If cached_* lists are provided, only TMDB-enrich new movies."""
         self._progress_bar.start()
+        self._skipped = False
         self._tmdb_key    = tmdb_key
         self._cached_plex = cached_plex or []
         self._cached_lb   = cached_lb   or []
+        self._new_plex    = []
+        self._new_lb      = []
         sources = []
         if plex_url and plex_token:
             sources.append('plex')
         if lb_username:
             sources.append('lb')
         self._total[0] = len(sources)
+
+        Clock.schedule_once(lambda dt: self._show_skip_if_needed(), 8)
+        Clock.schedule_once(lambda dt: self._auto_skip(), 60)
 
         if not sources:
             Clock.schedule_once(lambda dt: self._finish(), 0.2)
@@ -2111,9 +2117,8 @@ class LoadingScreen(MDScreen):
 
     def _on_plex_err(self, e):
         self._log(f"Plex error: {e}")
-        # Keep cached data on error
+        self._new_plex = []
         if self._cached_plex:
-            self._new_plex = []
             self._log("Using cached Plex data")
         self._check_done()
 
@@ -2127,8 +2132,8 @@ class LoadingScreen(MDScreen):
 
     def _on_lb_err(self, e):
         self._log(f"LB error: {e}")
+        self._new_lb = []
         if self._cached_lb:
-            self._new_lb = []
             self._log("Using cached Letterboxd data")
         self._check_done()
 
@@ -2141,10 +2146,8 @@ class LoadingScreen(MDScreen):
         self._done_count[0] += 1
         if self._done_count[0] >= self._total[0]:
             _find_intersection(_plex_movies, _lb_movies)
-            tmdb_key  = getattr(self, '_tmdb_key', '')
-            new_plex  = getattr(self, '_new_plex', _plex_movies)
-            new_lb    = getattr(self, '_new_lb',   _lb_movies)
-            new_movies = new_plex + new_lb
+            tmdb_key   = self._tmdb_key
+            new_movies = self._new_plex + self._new_lb
             if tmdb_key and new_movies:
                 self._log(f"Enriching {len(new_movies)} new movies via TMDB…")
                 fetch_tmdb_enrich_async(new_movies, tmdb_key, self._on_tmdb_done)
@@ -2154,6 +2157,8 @@ class LoadingScreen(MDScreen):
                 self._save_and_finish()
 
     def _on_tmdb_done(self):
+        if self._skipped:
+            return
         self._log("Metadata ready. Downloading posters…")
         self._save_and_finish()
 
@@ -2163,6 +2168,8 @@ class LoadingScreen(MDScreen):
 
     def _finish(self):
         """Data fetch complete — now download posters with progress, then enter app."""
+        if self._skipped:
+            return
         self._progress_bar.stop()
         self._progress_bar.value = 0
         _notify_refresh()
@@ -2196,8 +2203,22 @@ class LoadingScreen(MDScreen):
         self._pct_lbl.text = f"{pct}%"
         self._poster_lbl.text = f"Posters {done}/{total}"
 
+    def _show_skip_if_needed(self):
+        if not self._skipped:
+            self._skip_btn.opacity = 1
+            self._skip_btn.disabled = False
+
+    def _auto_skip(self):
+        if not self._skipped:
+            self._log("Loading timed out — entering app with cached data")
+            self._on_skip()
+
     def _on_skip(self, *_):
+        if self._skipped:
+            return
+        self._skipped = True
         self._skip_btn.disabled = True
+        MovieCache.save(_plex_movies, _lb_movies, _lb_stats)
         Clock.schedule_once(lambda dt: self._on_ready(), 0.1)
 
 
@@ -2585,16 +2606,14 @@ class RecommendScreen(MDScreen):
         self._card_area = FloatLayout(size_hint=(1, 1))
         root.add_widget(self._card_area)
 
-        btn_outer = BoxLayout(size_hint_y=None, height=dp(80))
-        btn_row = BoxLayout(size_hint=(None, 1), width=dp(280),
-                            pos_hint={'center_x': 0.5},
+        btn_row = BoxLayout(size_hint_y=None, height=dp(80),
                             padding=[dp(8), dp(4)], spacing=dp(8))
 
         def _action_col(icon, label_text, color, action):
-            col = BoxLayout(orientation='vertical', spacing=dp(2))
+            col = BoxLayout(orientation='vertical', size_hint_x=None,
+                            width=dp(72), spacing=dp(2))
             btn = MDIconButton(icon=icon, theme_icon_color="Custom",
-                               icon_color=color, icon_size=dp(34),
-                               pos_hint={'center_x': 0.5})
+                               icon_color=color, icon_size=dp(34))
             btn.bind(on_press=lambda *_: self._animate(action))
             lbl = MDLabel(text=label_text, font_size=dp(11),
                           theme_text_color="Custom", text_color=color,
@@ -2603,11 +2622,12 @@ class RecommendScreen(MDScreen):
             col.add_widget(lbl)
             return col
 
+        btn_row.add_widget(Widget())
         btn_row.add_widget(_action_col("skip-next", "Skip", ACCENT, 'skip'))
         btn_row.add_widget(_action_col("thumb-down-outline", "Nope", GOLD, 'not_interested'))
         btn_row.add_widget(_action_col("check-circle-outline", "Watch", GREEN, 'accept'))
-        btn_outer.add_widget(btn_row)
-        root.add_widget(btn_outer)
+        btn_row.add_widget(Widget())
+        root.add_widget(btn_row)
 
         self._toast_lbl = MDLabel(
             text="", font_size=dp(12),
