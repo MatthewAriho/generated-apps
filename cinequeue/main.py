@@ -220,20 +220,22 @@ class MovieCache:
             #print(f"[Cache] Load failed: {e}")
         return [], [], {}
 
+    _save_lock = threading.Lock()
+
     @classmethod
     def save(cls, plex_movies, lb_movies, lb_stats):
         try:
-            with open(cls._file(), 'w') as fp:
-                json.dump({
-                    'plex':     plex_movies,
-                    'lb':       lb_movies,
-                    'lb_stats': lb_stats,
-                    'saved_at': datetime.now().isoformat(),
-                }, fp)
-            #print(f"[Cache] Saved {len(plex_movies)} plex, {len(lb_movies)} lb")
-        except Exception as e:
+            snapshot = {
+                'plex':     [dict(m) for m in plex_movies],
+                'lb':       [dict(m) for m in lb_movies],
+                'lb_stats': dict(lb_stats) if lb_stats else {},
+                'saved_at': datetime.now().isoformat(),
+            }
+            with cls._save_lock:
+                with open(cls._file(), 'w') as fp:
+                    json.dump(snapshot, fp)
+        except Exception:
             pass
-            #print(f"[Cache] Save failed: {e}")
 
     @classmethod
     def merge(cls, cached, fresh):
@@ -2206,8 +2208,9 @@ class LoadingScreen(MDScreen):
                 pct = int(done[0] / len(missing) * 100)
                 Clock.schedule_once(lambda dt, p=pct, d=done[0], t=len(missing):
                     self._update_progress(p, d, t), 0)
-            MovieCache.save(_plex_movies, _lb_movies, _lb_stats)
-            Clock.schedule_once(lambda dt: self._on_ready(), 0.3)
+            Clock.schedule_once(lambda dt: (
+                MovieCache.save(_plex_movies, _lb_movies, _lb_stats),
+                self._on_ready()), 0.3)
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -3901,7 +3904,8 @@ class CineQueueApp(MDApp):
                     ctx = ssl._create_unverified_context()
                     for m in missing:
                         PosterCache.ensure(m, ctx)
-                    MovieCache.save(_plex_movies, _lb_movies, _lb_stats)
+                    Clock.schedule_once(lambda dt:
+                        MovieCache.save(_plex_movies, _lb_movies, _lb_stats), 0)
                 threading.Thread(target=_fetch_new, daemon=True).start()
         if not self._refresh_timer:
             self._start_refresh_timer()
