@@ -1994,7 +1994,15 @@ class LoadingScreen(MDScreen):
 
     def _build_ui(self):
         root = BoxLayout(orientation='vertical', padding=dp(32), spacing=dp(16))
-        root.add_widget(Widget(size_hint_y=0.2))
+        root.add_widget(Widget(size_hint_y=0.08))
+
+        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'icon.png')
+        logo = AsyncImage(source=logo_path,
+                          size_hint=(None, None), size=(dp(120), dp(120)),
+                          pos_hint={'center_x': 0.5},
+                          allow_stretch=True, keep_ratio=True)
+        root.add_widget(logo)
+        root.add_widget(Widget(size_hint_y=None, height=dp(8)))
 
         title = MDLabel(text="[b]CineQueue[/b]", markup=True,
                         font_size=dp(36),
@@ -2155,6 +2163,8 @@ class LoadingScreen(MDScreen):
 
     def _finish(self):
         """Data fetch complete — now download posters with progress, then enter app."""
+        self._progress_bar.stop()
+        self._progress_bar.value = 0
         _notify_refresh()
         movies = [m for m in (_plex_movies + _lb_movies) if m.get('poster_url')]
         total = len(movies)
@@ -2575,14 +2585,16 @@ class RecommendScreen(MDScreen):
         self._card_area = FloatLayout(size_hint=(1, 1))
         root.add_widget(self._card_area)
 
-        btn_row = BoxLayout(size_hint_y=None, height=dp(80),
+        btn_outer = BoxLayout(size_hint_y=None, height=dp(80))
+        btn_row = BoxLayout(size_hint=(None, 1), width=dp(280),
+                            pos_hint={'center_x': 0.5},
                             padding=[dp(8), dp(4)], spacing=dp(8))
 
         def _action_col(icon, label_text, color, action):
-            col = BoxLayout(orientation='vertical', size_hint_x=None,
-                            width=dp(72), spacing=dp(2))
+            col = BoxLayout(orientation='vertical', spacing=dp(2))
             btn = MDIconButton(icon=icon, theme_icon_color="Custom",
-                               icon_color=color, icon_size=dp(34))
+                               icon_color=color, icon_size=dp(34),
+                               pos_hint={'center_x': 0.5})
             btn.bind(on_press=lambda *_: self._animate(action))
             lbl = MDLabel(text=label_text, font_size=dp(11),
                           theme_text_color="Custom", text_color=color,
@@ -2591,12 +2603,11 @@ class RecommendScreen(MDScreen):
             col.add_widget(lbl)
             return col
 
-        btn_row.add_widget(Widget())
         btn_row.add_widget(_action_col("skip-next", "Skip", ACCENT, 'skip'))
         btn_row.add_widget(_action_col("thumb-down-outline", "Nope", GOLD, 'not_interested'))
         btn_row.add_widget(_action_col("check-circle-outline", "Watch", GREEN, 'accept'))
-        btn_row.add_widget(Widget())
-        root.add_widget(btn_row)
+        btn_outer.add_widget(btn_row)
+        root.add_widget(btn_outer)
 
         self._toast_lbl = MDLabel(
             text="", font_size=dp(12),
@@ -3224,8 +3235,8 @@ class SettingsScreen(MDScreen):
 
         export_hint = MDLabel(
             text="Saves to /sdcard/Download/cinequeue_settings.json",
-            font_size=dp(9), theme_text_color="Custom", text_color=SUBTEXT,
-            size_hint_y=None, height=dp(18), halign='center', valign='middle')
+            font_size=dp(11), theme_text_color="Custom", text_color=SUBTEXT,
+            size_hint_y=None, height=dp(22), halign='center', valign='middle')
         export_hint.bind(size=lambda w, s: setattr(w, 'text_size', s))
         inner.add_widget(export_hint)
 
