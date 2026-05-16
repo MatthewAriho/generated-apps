@@ -187,7 +187,7 @@ class MovieCache:
     """Persists movie data across launches to avoid re-fetching everything."""
     _path = None
     _TMDB_FIELDS = ('poster_url', 'poster_color', 'director', 'runtime',
-                    'genre', 'country', 'year')
+                    'genre', 'country', 'year', 'local_poster')
     _EMPTY_VALS  = (None, '', 'Unknown', '?', 0)
 
     @classmethod
@@ -3066,7 +3066,7 @@ class SettingsScreen(MDScreen):
 
         scroll = ScrollView()
         inner  = BoxLayout(orientation='vertical', size_hint_y=None,
-                           spacing=dp(4), padding=[dp(10), dp(6)])
+                           spacing=dp(6), padding=[dp(10), dp(6)])
         inner.bind(minimum_height=inner.setter('height'))
 
         sections = [
@@ -3128,11 +3128,12 @@ class SettingsScreen(MDScreen):
                 inner.add_widget(inp)
 
         # Services control
+        inner.add_widget(Widget(size_hint_y=None, height=dp(8)))
         inner.add_widget(SectionLabel(text="SERVICE CONTROL"))
         svc_note = MDLabel(
             text="NAS IP is read from your Plex URL. Requires DSM credentials above.",
-            font_size=dp(9), theme_text_color="Custom", text_color=SUBTEXT,
-            size_hint_y=None, height=dp(20),
+            font_size=dp(10), theme_text_color="Custom", text_color=SUBTEXT,
+            size_hint_y=None, height=dp(24),
             halign='left', valign='middle')
         svc_note.bind(size=lambda w, s: setattr(w, 'text_size', s))
         inner.add_widget(svc_note)
@@ -3141,14 +3142,14 @@ class SettingsScreen(MDScreen):
         for svc_key, svc_label in [('plex',      'Plex Media Server'),
                                     ('qbit_proj', 'VPN + qBittorrent'),
                                     ('arr_proj',  'Prowlarr / Sonarr / Radarr')]:
-            row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(4))
-            name_lbl = MDLabel(text=svc_label, font_size=dp(9),
+            row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(4))
+            name_lbl = MDLabel(text=svc_label, font_size=dp(11),
                                theme_text_color="Custom", text_color=TEXT,
-                               size_hint_x=0.30, halign='left', valign='middle')
+                               size_hint_x=0.34, halign='left', valign='middle')
             name_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
-            status_lbl = MDLabel(text="• unknown", font_size=dp(8),
+            status_lbl = MDLabel(text="• unknown", font_size=dp(10),
                                  theme_text_color="Custom", text_color=SUBTEXT,
-                                 size_hint_x=0.28, halign='left', valign='middle')
+                                 size_hint_x=0.26, halign='left', valign='middle')
             status_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
             play_b = MDIconButton(icon="play",   theme_icon_color="Custom",
                                   icon_color=GREEN,   size_hint_x=None)

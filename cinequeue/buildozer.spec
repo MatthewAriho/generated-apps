@@ -4,8 +4,9 @@ package.name = cinequeue
 package.domain = org.cinequeue
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,ttf
-version = 3.5
-requirements = python3,kivy,kivymd
+icon.filename = icon.png
+version = 3.6
+requirements = python3,kivy,kivymd==1.2.0
 orientation = portrait
 osx.python_version = 3
 osx.kivy_version = 1.9.1
