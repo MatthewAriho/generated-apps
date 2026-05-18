@@ -279,6 +279,12 @@ class BankConnectTab(MDBoxLayout):
         from kivy.utils import platform as kp
         if kp == "android":
             try:
+                import subprocess
+                subprocess.Popen(['am', 'start', '-a', 'android.intent.action.VIEW', '-d', url])
+                return
+            except Exception:
+                pass
+            try:
                 from jnius import autoclass
                 Intent = autoclass("android.content.Intent")
                 Uri = autoclass("android.net.Uri")
