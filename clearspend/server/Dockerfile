@@ -9,4 +9,4 @@ COPY app.py .
 
 EXPOSE 8008
 
-CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:8008", "--access-logfile", "-", "--error-logfile", "-", "--log-level", "debug", "app:app"]
+CMD ["gunicorn", "-w", "1", "-b", "0.0.0.0:8008", "--access-logfile", "-", "--error-logfile", "-", "--log-level", "debug", "app:app"]
