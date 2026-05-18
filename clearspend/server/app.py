@@ -37,6 +37,9 @@ DEEP_LINK = "clearspend://plaid-callback"
 _sessions = {}
 SESSION_TTL = 600
 
+# Webhook-delivered public_tokens queue (Plaid LINK/SESSION_FINISHED)
+_pending_tokens: list = []
+
 
 def _cfg():
     return {
@@ -113,6 +116,7 @@ def link_token():
         "country_codes": ["US", "CA"],
         "language": "en",
         "redirect_uri": oauth_redirect_uri,
+        "webhook": f"{server_url}/api/plaid-webhook",
         "hosted_link": {
             "completion_redirect_uri": completion_uri,
             "is_mobile_app": True,
@@ -163,6 +167,22 @@ def plaid_callback():
     return "OK", 200
 
 
+@app.post("/api/plaid-webhook")
+def plaid_webhook():
+    """Receive Plaid webhook events (no API key — called by Plaid servers)."""
+    data = request.get_json(force=True) or {}
+    wtype = data.get("webhook_type", "")
+    wcode = data.get("webhook_code", "")
+    app.logger.info(f"plaid-webhook type={wtype} code={wcode} keys={list(data.keys())}")
+
+    if wtype == "LINK" and wcode == "SESSION_FINISHED":
+        for pt in data.get("public_tokens", []):
+            _pending_tokens.append(pt)
+            app.logger.info(f"plaid-webhook queued public_token {pt[:20]}...")
+
+    return jsonify(status="ok")
+
+
 @app.post("/api/complete-link")
 @require_api_key
 def complete_link():
@@ -183,15 +203,15 @@ def complete_link():
     app.logger.info(f"complete-link session={session_id} callback_params_keys={list(callback_params.keys())} public_token={'set' if public_token else 'MISSING'}")
 
     if not public_token:
-        # Fallback: try /link/token/get (may not work for all environments)
-        link_token_val = session.get("link_token", "")
-        if link_token_val:
-            try:
-                resp = _plaid_post("/link/token/get", {**_auth(), "link_token": link_token_val})
-                public_token = resp.get("metadata", {}).get("public_token", "") or resp.get("public_token", "")
-                app.logger.info(f"complete-link link_token_get keys={list(resp.keys())} public_token={'set' if public_token else 'MISSING'}")
-            except Exception as e:
-                app.logger.warning(f"complete-link link_token/get failed: {e}")
+        # Plaid Hosted Link delivers public_token via LINK/SESSION_FINISHED webhook.
+        # Wait up to 12 seconds for the webhook to arrive.
+        app.logger.info("complete-link: no public_token in callback_params, waiting for webhook...")
+        for attempt in range(6):
+            if _pending_tokens:
+                public_token = _pending_tokens.pop(0)
+                app.logger.info(f"complete-link: got webhook token on attempt {attempt + 1}")
+                break
+            time.sleep(2)
 
     if not public_token:
         abort(502, description=f"No public_token available. callback_params keys: {list(callback_params.keys())}")
