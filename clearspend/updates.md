@@ -67,7 +67,37 @@ Affected file: `screens/transaction_list.py`, `_SORT_OPTIONS` list.
 
 ---
 
-## 4. Future / Backlog
+## 4. Event Expense Tracking ✅ (in progress)
+
+**Feature:** Group transactions under a named event (trip, wedding, etc.)
+
+- New `events` table: name, description, start/end date, location keyword, color
+- New `event_transactions` junction table
+- Events tab in bottom nav (map-marker icon)
+- Create event → set name, dates, optional location keyword for auto-matching
+- Auto-match: Plaid transactions whose date falls in event range AND description contains location keyword are auto-assigned
+- Manual assign: from transaction detail (edit screen) → "Add to event" picker
+- Event detail view: total spend, transaction list, breakdown by category
+
+**Files:** `models/database.py`, `screens/events.py`, `screens/edit_transaction.py`, `main.py`
+
+## 5. Financial Tips Engine ✅ (in progress)
+
+**Feature:** Rule-based tips shown on Dashboard based on spending patterns
+
+Rules:
+- Dining > 15% of income → suggest reducing
+- Subscriptions > $100/mo → list them
+- No investment/transfer transactions → suggest saving
+- Spending up >20% vs last month → flag
+- 50/30/20 rule check (needs/wants/savings ratio)
+- Largest single category → highlight
+
+Displayed as a scrollable chip/card section at bottom of Dashboard.
+
+**Files:** `utils/tips.py` (new), `screens/dashboard.py`
+
+## 6. Future / Backlog
 
 - Push notifications for budget overage alerts (requires foreground service on Android)
 - CSV export of transaction history
