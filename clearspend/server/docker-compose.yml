@@ -1,0 +1,12 @@
+services:
+  clearspend-server:
+    build: .
+    container_name: clearspend-server
+    restart: unless-stopped
+    ports:
+      - "8008:8008"
+    environment:
+      - PLAID_CLIENT_ID=69e46df110446b000de754e7
+      - PLAID_SECRET=7c288e28e0e03966399273807f2985
+      - PLAID_ENV=production
+      - CLEARSPEND_API_KEY=clearspend-nas-2026
