@@ -10,3 +10,4 @@ services:
       - PLAID_SECRET=7c288e28e0e03966399273807f2985
       - PLAID_ENV=production
       - CLEARSPEND_API_KEY=clearspend-nas-2026
+      - PUBLIC_URL=https://supersecretnas.tailc3a431.ts.net

@@ -74,10 +74,13 @@ def health():
     return jsonify(status="ok")
 
 
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
+
+
 @app.post("/api/link-token")
 @require_api_key
 def link_token():
-    server_url = request.host_url.rstrip("/")
+    server_url = PUBLIC_URL or request.host_url.rstrip("/")
     redirect_uri = f"{server_url}/plaid-callback"
     payload = {
         **_auth(),
