@@ -25,7 +25,7 @@ source.include_exts = py,png,jpg,kv,atlas,json
 #source.exclude_patterns = license,images/*/*.jpg
 
 # (str) Application versioning (method 1)
-version = 3.1
+version = 4.0
 
 # (list) Application requirements
 # All stdlib is included with python3. requests for bank API + cloud sync.

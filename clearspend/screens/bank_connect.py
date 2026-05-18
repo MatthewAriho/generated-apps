@@ -279,11 +279,16 @@ class BankConnectTab(MDBoxLayout):
                 _write_log("Calling create_link_token...")
                 resp = api.create_link_token()
                 url = resp.get("url", "")
-                _write_log(f"Got response: url={'present' if url else 'MISSING'} keys={list(resp.keys())}")
+                session_id = resp.get("session_id", "")
+                _write_log(f"Got response: url={'present' if url else 'MISSING'} session_id={'present' if session_id else 'MISSING'} keys={list(resp.keys())}")
                 if not url:
                     Clock.schedule_once(lambda *_:
                         Snackbar(text="Failed to create link token.").open(), 0)
                     return
+
+                # Store session_id so _handle_plaid_callback can use it
+                self._plaid_session_id = session_id
+                self._plaid_cfg = cfg
 
                 _write_log(f"Opening browser with URL: {url[:80]}...")
                 Clock.schedule_once(lambda *_, u=url: (
@@ -338,12 +343,16 @@ class BankConnectTab(MDBoxLayout):
         import webbrowser
         webbrowser.open(url)
 
-    def _handle_plaid_callback(self, public_token: str):
-        """Called when the app receives a Plaid redirect with a public_token."""
-        cfg = self._get_plaid_config()
+    def _handle_plaid_callback(self, public_token: str = "", session_id: str = ""):
+        """Called when the app receives a Plaid redirect."""
+        cfg = getattr(self, '_plaid_cfg', None) or self._get_plaid_config()
         if not cfg or not cfg.get("server_url"):
             Snackbar(text="Plaid server not configured.").open()
             return
+
+        # Use session_id from stored state if not passed directly
+        if not session_id:
+            session_id = getattr(self, '_plaid_session_id', "")
 
         Snackbar(text="Connecting bank account...").open()
 
@@ -352,7 +361,11 @@ class BankConnectTab(MDBoxLayout):
                 from utils.bank_api import PlaidAPI
                 from models.database import Database
                 api = PlaidAPI(**cfg)
-                result = api.connect(public_token=public_token)
+                # Use complete-link flow if we have a session_id
+                if session_id:
+                    result = api.complete_link(session_id=session_id)
+                else:
+                    result = api.connect(public_token=public_token)
 
                 if result.get("success"):
                     db = Database.get()

@@ -469,19 +469,19 @@ class ClearSpendApp(MDApp):
                 return
             if str(uri.getHost() or "") != "plaid-callback":
                 return
-            # Log ALL query params so we can see what Plaid actually sends
             try:
                 query = str(uri.getQuery() or "")
                 self._plaid_log(f"full query string: {query}")
             except Exception as qe:
                 self._plaid_log(f"query log error: {qe}")
-            code = str(uri.getQueryParameter("public_token") or "")
-            if not code:
-                # Try alternate param names Plaid Hosted Link may use
-                code = str(uri.getQueryParameter("oauth_state_id") or "")
-                if code:
-                    self._plaid_log(f"found oauth_state_id instead of public_token")
-            self._plaid_log(f"token={'present' if code else 'MISSING'}")
+            # New flow: server sends session_id in deep link
+            code = str(uri.getQueryParameter("session_id") or "")
+            if code:
+                self._plaid_log(f"found session_id: {code[:8]}...")
+            else:
+                # Legacy fallback: direct public_token
+                code = str(uri.getQueryParameter("public_token") or "")
+                self._plaid_log(f"public_token={'present' if code else 'MISSING'}")
         except Exception:
             return
 
@@ -501,11 +501,17 @@ class ClearSpendApp(MDApp):
 
         Clock.schedule_once(lambda *_: self._process_plaid_token(code), 0.3)
 
-    def _process_plaid_token(self, public_token: str):
-        """Route the Plaid public_token to BankConnectTab for processing."""
+    def _process_plaid_token(self, code: str):
+        """Route the Plaid session_id (or legacy public_token) to BankConnectTab."""
         try:
             bank_tab = self.root.ids.bank_tab
-            bank_tab._handle_plaid_callback(public_token)
+            # Determine if this is a session_id or legacy public_token
+            # session_ids from secrets.token_urlsafe(16) are ~22 chars, URL-safe base64
+            # public_tokens start with 'public-'
+            if code.startswith("public-"):
+                bank_tab._handle_plaid_callback(public_token=code)
+            else:
+                bank_tab._handle_plaid_callback(session_id=code)
             self.root.ids.nav.switch_tab("bank")
         except Exception as e:
             from kivymd.uix.snackbar import Snackbar

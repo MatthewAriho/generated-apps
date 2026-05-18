@@ -234,8 +234,15 @@ class PlaidAPI(BankAPI):
     # ---- Link flow (via server) ----
 
     def create_link_token(self) -> dict:
-        """Ask server to create a Hosted Link token. Returns { url }."""
+        """Ask server to create a Hosted Link token. Returns { url, session_id }."""
         return self._server_post("/api/link-token")
+
+    def complete_link(self, session_id: str) -> dict:
+        """After Plaid callback, exchange session_id for access_token via server."""
+        try:
+            return self._server_post("/api/complete-link", {"session_id": session_id})
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     # ---- BankAPI interface (via server) ----
 
