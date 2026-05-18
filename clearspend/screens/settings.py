@@ -575,9 +575,14 @@ class SettingsTab(MDBoxLayout):
         Snackbar(text="Plaid settings saved.").open()
 
     def show_plaid_log(self):
-        """Read and display plaid_debug.txt in a dialog."""
+        """Read and display plaid_debug.txt in a scrollable dialog with export."""
         from kivymd.uix.dialog import MDDialog
-        from kivymd.uix.button import MDFlatButton
+        from kivymd.uix.button import MDFlatButton, MDRaisedButton
+        from kivymd.uix.label import MDLabel
+        from kivy.uix.scrollview import ScrollView
+        from kivy.uix.boxlayout import BoxLayout
+        from kivy.metrics import dp
+
         try:
             if platform == "android":
                 try:
@@ -590,16 +595,50 @@ class SettingsTab(MDBoxLayout):
             path = os.path.join(base, "plaid_debug.txt")
             if os.path.exists(path):
                 with open(path) as f:
-                    content = f.read()[-2000:]  # last 2000 chars
+                    content = f.read()
             else:
-                content = f"Log file not found.\nExpected: {path}"
+                content = f"Log file not found.\nExpected:\n{path}"
         except Exception as e:
             content = f"Error reading log: {e}"
+            path = None
+
+        label = MDLabel(
+            text=content or "(empty)",
+            font_style="Caption",
+            theme_text_color="Primary",
+            size_hint_y=None,
+            markup=False,
+        )
+        label.bind(texture_size=lambda w, s: setattr(w, 'height', s[1]))
+
+        scroll = ScrollView(size_hint=(1, None), height=dp(300))
+        scroll.add_widget(label)
+
+        container = BoxLayout(orientation='vertical', size_hint_y=None, height=dp(300))
+        container.add_widget(scroll)
+
+        def _export(*_):
+            try:
+                dst_dir = '/sdcard/Download'
+                if not os.path.isdir(dst_dir):
+                    dst_dir = os.path.expanduser("~")
+                import shutil
+                dst = os.path.join(dst_dir, "plaid_debug.txt")
+                shutil.copy2(path, dst)
+                from kivymd.uix.snackbar import Snackbar
+                Snackbar(text=f"Exported to {dst}").open()
+            except Exception as ex:
+                from kivymd.uix.snackbar import Snackbar
+                Snackbar(text=f"Export failed: {ex}").open()
 
         d = MDDialog(
             title="Plaid Debug Log",
-            text=content or "(empty)",
-            buttons=[MDFlatButton(text="OK", on_release=lambda *_: d.dismiss())],
+            type="custom",
+            content_cls=container,
+            buttons=[
+                MDRaisedButton(text="EXPORT", on_release=_export),
+                MDFlatButton(text="CLOSE", on_release=lambda *_: d.dismiss()),
+            ],
         )
         d.open()
 

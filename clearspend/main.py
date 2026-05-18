@@ -434,6 +434,16 @@ class ClearSpendApp(MDApp):
             pass
 
     # ---------------------------------------------------------------- plaid deep link
+    def _plaid_log(self, msg):
+        try:
+            import os, datetime
+            from android.storage import app_storage_path
+            base = app_storage_path()
+            with open(os.path.join(base, "plaid_debug.txt"), "a") as f:
+                f.write(f"[{datetime.datetime.now()}] {msg}\n")
+        except Exception:
+            pass
+
     def _check_plaid_intent(self):
         """Cold-start / resume wrapper: read getIntent() and forward."""
         from kivy.utils import platform
@@ -450,14 +460,17 @@ class ClearSpendApp(MDApp):
         """Shared handler for both cold-start and on_new_intent paths."""
         code = None
         try:
+            self._plaid_log(f"_handle_plaid_intent called, intent={'None' if intent is None else 'present'}")
             if intent is None:
                 return
             uri = intent.getData()
+            self._plaid_log(f"uri={uri} scheme={str(uri.getScheme() or '') if uri else 'N/A'} host={str(uri.getHost() or '') if uri else 'N/A'}")
             if uri is None or str(uri.getScheme() or "") != "clearspend":
                 return
             if str(uri.getHost() or "") != "plaid-callback":
                 return
             code = str(uri.getQueryParameter("public_token") or "")
+            self._plaid_log(f"public_token={'present' if code else 'MISSING'}")
         except Exception:
             return
 
