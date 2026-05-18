@@ -367,7 +367,7 @@ class Database:
             year_month = datetime.now().strftime("%Y-%m")
         cur = self.conn.execute(
             "SELECT type, SUM(amount) as total FROM transactions "
-            "WHERE date LIKE ? GROUP BY type",
+            "WHERE date LIKE ? AND type IN ('income','expense') GROUP BY type",
             (f"{year_month}%",),
         )
         result: dict = {"income": 0.0, "expense": 0.0}

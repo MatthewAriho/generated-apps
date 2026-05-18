@@ -39,19 +39,26 @@ class IncomeExpenseBar(Widget):
         w, h = self.size
 
         max_val = max(self.income, self.expense, 1)
-        bar_area_h = h - dp(30)  # leave room for labels
+        label_h  = dp(18)
+        bottom_h = dp(20)  # space for "Income"/"Expense" labels
+        bar_area_h = h - bottom_h - label_h - dp(4)
         bar_w = w * 0.25
         gap = w * 0.1
 
         # Income bar (left)
         inc_h = (self.income / max_val) * bar_area_h if max_val > 0 else 0
         inc_x = x + w * 0.5 - bar_w - gap * 0.5
-        inc_y = y + dp(20)
+        inc_y = y + bottom_h
 
         # Expense bar (right)
         exp_h = (self.expense / max_val) * bar_area_h if max_val > 0 else 0
         exp_x = x + w * 0.5 + gap * 0.5
-        exp_y = y + dp(20)
+        exp_y = y + bottom_h
+
+        # Clamp value label tops so they never exceed widget bounds
+        max_label_y = y + h - label_h
+        inc_label_y = min(inc_y + inc_h + dp(2), max_label_y)
+        exp_label_y = min(exp_y + exp_h + dp(2), max_label_y)
 
         with self.canvas:
             # Income bar
@@ -64,20 +71,20 @@ class IncomeExpenseBar(Widget):
             RoundedRectangle(pos=(exp_x, exp_y), size=(bar_w, max(exp_h, dp(2))),
                              radius=[dp(4), dp(4), 0, 0])
 
-            # Income label
+            # Income value label
             tex = _text_texture(f"${self.income:,.0f}", font_size=11,
                                 color=(0.4, 1, 0.55, 1))
             Color(1, 1, 1, 1)
             Rectangle(texture=tex,
-                      pos=(inc_x + bar_w / 2 - tex.width / 2, inc_y + inc_h + dp(2)),
+                      pos=(inc_x + bar_w / 2 - tex.width / 2, inc_label_y),
                       size=tex.size)
 
-            # Expense label
+            # Expense value label
             tex2 = _text_texture(f"${self.expense:,.0f}", font_size=11,
                                  color=(1, 0.45, 0.45, 1))
             Color(1, 1, 1, 1)
             Rectangle(texture=tex2,
-                      pos=(exp_x + bar_w / 2 - tex2.width / 2, exp_y + exp_h + dp(2)),
+                      pos=(exp_x + bar_w / 2 - tex2.width / 2, exp_label_y),
                       size=tex2.size)
 
             # Bottom labels

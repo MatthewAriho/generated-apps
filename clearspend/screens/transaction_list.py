@@ -91,8 +91,8 @@ KV = """
 
     MDBoxLayout:
         size_hint_y: None
-        height: dp(50)
-        padding: [dp(12), dp(6)]
+        height: dp(58)
+        padding: [dp(12), dp(8)]
         md_bg_color: app.theme_cls.bg_dark
 
         MDTextField:
@@ -100,7 +100,7 @@ KV = """
             hint_text: "Search transactions..."
             mode: "rectangle"
             size_hint_y: None
-            height: dp(40)
+            height: dp(42)
             icon_right: "magnify"
             on_text: root.on_search_text(self.text)
 
