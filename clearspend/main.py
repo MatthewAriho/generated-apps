@@ -529,41 +529,22 @@ class ClearSpendApp(MDApp):
         Snackbar(text="Demo data loaded!").open()
 
     # ---------------------------------------------------------------- refresh helpers
-    def refresh_dashboard(self, *_):
-        try:
-            self.root.ids.dashboard_tab.refresh()
-        except Exception:
-            pass
+    # All refreshes are deferred by 120ms so the tab slide animation
+    # completes before any DB work or widget rebuilding begins.
+    def _deferred(self, tab_id: str):
+        def _do(*_):
+            try:
+                self.root.ids[tab_id].refresh()
+            except Exception:
+                pass
+        Clock.schedule_once(_do, 0.12)
 
-    def refresh_history(self, *_):
-        try:
-            self.root.ids.history_tab.refresh()
-        except Exception:
-            pass
-
-    def refresh_bank(self, *_):
-        try:
-            self.root.ids.bank_tab.refresh()
-        except Exception:
-            pass
-
-    def refresh_trends(self, *_):
-        try:
-            self.root.ids.trends_tab.refresh()
-        except Exception:
-            pass
-
-    def refresh_budget(self, *_):
-        try:
-            self.root.ids.budget_tab.refresh()
-        except Exception:
-            pass
-
-    def refresh_goals(self, *_):
-        try:
-            self.root.ids.goals_tab.refresh()
-        except Exception:
-            pass
+    def refresh_dashboard(self, *_): self._deferred("dashboard_tab")
+    def refresh_history(self, *_):   self._deferred("history_tab")
+    def refresh_bank(self, *_):      self._deferred("bank_tab")
+    def refresh_trends(self, *_):    self._deferred("trends_tab")
+    def refresh_budget(self, *_):    self._deferred("budget_tab")
+    def refresh_goals(self, *_):     self._deferred("goals_tab")
 
 
 if __name__ == "__main__":

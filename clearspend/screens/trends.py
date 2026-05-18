@@ -2,6 +2,8 @@
 from __future__ import annotations
 from datetime import datetime, date
 
+import threading
+
 from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.metrics import dp
@@ -116,17 +118,19 @@ class TrendsContent(MDBoxLayout):
         self.back_items = [["arrow-left", lambda x: _get_app().go_back()]] if value else []
 
     def refresh(self, *_):
-        try:
-            self._refresh_inner()
-        except Exception:
-            pass
+        def _fetch():
+            try:
+                from models.database import Database
+                db = Database.get()
+                ym = datetime.now().strftime("%Y-%m")
+                breakdown = db.get_category_breakdown(ym)
+                recurring = db.get_recurring_transactions()
+                Clock.schedule_once(lambda *_: self._apply(breakdown, recurring), 0)
+            except Exception:
+                pass
+        threading.Thread(target=_fetch, daemon=True).start()
 
-    def _refresh_inner(self):
-        from models.database import Database
-        db = Database.get()
-        ym = datetime.now().strftime("%Y-%m")
-
-        breakdown = db.get_category_breakdown(ym)
+    def _apply(self, breakdown, recurring):
         self._update_donut(breakdown)
 
         self.ids.categories_box.clear_widgets()
@@ -142,7 +146,6 @@ class TrendsContent(MDBoxLayout):
                 halign="center", theme_text_color="Secondary", adaptive_height=True,
             ))
 
-        recurring = db.get_recurring_transactions()
         self.ids.recurring_box.clear_widgets()
         for r in recurring:
             card = MDCard(
@@ -153,14 +156,12 @@ class TrendsContent(MDBoxLayout):
                 radius=[dp(10)],
             )
             left = MDBoxLayout(orientation="vertical", adaptive_height=True, size_hint_x=1)
-            desc_label = MDLabel(
+            left.add_widget(MDLabel(
                 text=r["description"][:28], font_style="Body1", adaptive_height=True,
                 shorten=True, shorten_from="right",
-            )
-            left.add_widget(desc_label)
-            sub_text = f"Seen {r['month_count']} months | {r['category'][:18]}"
+            ))
             left.add_widget(MDLabel(
-                text=sub_text,
+                text=f"Seen {r['month_count']} months | {r['category'][:18]}",
                 font_style="Caption", theme_text_color="Secondary", adaptive_height=True,
                 shorten=True, shorten_from="right",
             ))

@@ -2,6 +2,8 @@
 from __future__ import annotations
 from datetime import datetime, date
 
+import threading
+
 from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.metrics import dp
@@ -199,23 +201,45 @@ class BudgetContent(MDBoxLayout):
         self._copy_dialog.open()
 
     def refresh(self, *_):
-        try:
-            self._refresh_inner()
-        except Exception:
-            pass
+        def _fetch():
+            try:
+                import calendar
+                from models.database import Database
+                db = Database.get()
+                ym = f"{self._year:04d}-{self._month:02d}"
+                statuses = db.get_budget_status(ym)
 
-    def _refresh_inner(self):
-        from models.database import Database
-        db  = Database.get()
-        ym  = f"{self._year:04d}-{self._month:02d}"
+                # Forecast data
+                year, month = map(int, ym.split("-"))
+                today = datetime.now()
+                days_elapsed = today.day
+                total_days = calendar.monthrange(year, month)[1]
+                summary = db.get_monthly_summary(ym)
+                spent = summary["expense"]
+                projected_end = (spent / days_elapsed * total_days) if days_elapsed > 0 else 0.0
+                days_left = total_days - days_elapsed
+                total_budget = sum(b["budget"] for b in statuses)
 
-        statuses = db.get_budget_status(ym)
+                Clock.schedule_once(lambda *_: self._apply(
+                    statuses, ym, spent, projected_end, total_budget, days_elapsed, total_days, days_left
+                ), 0)
+            except Exception:
+                pass
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _apply(self, statuses, ym, spent, projected_end, total_budget, days_elapsed, total_days, days_left):
         self.ids.budget_list.clear_widgets()
-
         if statuses:
             for s in statuses:
                 self.ids.budget_list.add_widget(self._make_budget_card(s))
-            self._update_forecast(db, ym)
+            if days_elapsed > 0:
+                self.forecast_text = (
+                    f"Day {days_elapsed}/{total_days} | "
+                    f"Spent ${spent:,.2f} | "
+                    f"Projected: ${projected_end:,.2f} | "
+                    f"{days_left} days left"
+                )
+            self._update_pace_chart(spent, projected_end, total_budget)
             self._generate_tips(statuses)
         else:
             self.ids.budget_list.add_widget(MDLabel(
@@ -263,29 +287,6 @@ class BudgetContent(MDBoxLayout):
         card.add_widget(bar)
         return card
 
-    def _update_forecast(self, db, ym):
-        import calendar
-        year, month = map(int, ym.split("-"))
-        today = datetime.now()
-        days_elapsed = today.day
-        total_days   = calendar.monthrange(year, month)[1]
-
-        summary = db.get_monthly_summary(ym)
-        spent   = summary["expense"]
-        projected_end = 0.0
-        if days_elapsed > 0:
-            pace          = spent / days_elapsed
-            projected_end = pace * total_days
-            days_left     = total_days - days_elapsed
-            self.forecast_text = (
-                f"Day {days_elapsed}/{total_days} | "
-                f"Spent ${spent:,.2f} | "
-                f"Projected: ${projected_end:,.2f} | "
-                f"{days_left} days left"
-            )
-
-        total_budget = sum(b["budget"] for b in db.get_budget_status(ym))
-        self._update_pace_chart(spent, projected_end, total_budget)
 
     def _update_pace_chart(self, spent, projected, total_budget):
         from utils.charts import BudgetPaceBar

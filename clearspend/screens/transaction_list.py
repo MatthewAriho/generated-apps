@@ -1,5 +1,6 @@
 """Transaction list tab - scrollable history with search, filter, and sort."""
 from __future__ import annotations
+import threading
 from datetime import date, datetime
 
 from kivy.clock import Clock
@@ -147,29 +148,34 @@ class TransactionListTab(MDBoxLayout):
 
     def refresh(self, *_):
         self._refresh_event = None
-        from models.database import Database
         type_ = None if self.filter_type == "all" else self.filter_type
-        txns = Database.get().get_transactions(year_month=self._ym(), type_=type_, limit=500)
-
-        # Search filter
-        if self._search_text:
-            q = self._search_text
-            txns = [
-                t for t in txns
-                if q in (t.get("description") or "").lower()
-                or q in (t.get("category") or "").lower()
-            ]
-
-        # Sort
-        reverse = self._sort_desc
+        ym = self._ym()
+        search = self._search_text
         key = self._sort_key
-        try:
-            txns = sorted(txns, key=lambda t: (t.get(key) or ""), reverse=reverse)
-        except Exception:
-            pass
+        reverse = self._sort_desc
 
+        def _fetch():
+            try:
+                from models.database import Database
+                txns = Database.get().get_transactions(year_month=ym, type_=type_, limit=500)
+                if search:
+                    txns = [
+                        t for t in txns
+                        if search in (t.get("description") or "").lower()
+                        or search in (t.get("category") or "").lower()
+                    ]
+                try:
+                    txns = sorted(txns, key=lambda t: (t.get(key) or ""), reverse=reverse)
+                except Exception:
+                    pass
+                Clock.schedule_once(lambda *_: self._apply(txns), 0)
+            except Exception:
+                pass
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _apply(self, txns):
         self.ids.count_label.text = f"{len(txns)} items"
-
         lst = self.ids.txn_list
         lst.clear_widgets()
 
@@ -183,7 +189,6 @@ class TransactionListTab(MDBoxLayout):
             ))
             return
 
-        # Build widgets in batches to avoid blocking the UI thread
         self._build_rows(txns, 0)
 
     def _build_rows(self, txns: list, start: int):

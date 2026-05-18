@@ -2,6 +2,8 @@
 from __future__ import annotations
 from datetime import date, datetime
 
+import threading
+
 from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.metrics import dp
@@ -283,10 +285,25 @@ class DashboardTab(MDBoxLayout):
 
     # ---------------------------------------------------------------- public
     def refresh(self, *_):
-        from models.database import Database
-        db = Database.get()
-        s = db.get_monthly_summary(self._ym())
+        def _fetch():
+            from models.database import Database
+            db = Database.get()
+            ym = self._ym()
+            s = db.get_monthly_summary(ym)
 
+            pm = self._month - 1
+            py = self._year
+            if pm <= 0:
+                pm = 12
+                py -= 1
+            prev = db.get_monthly_summary(f"{py:04d}-{pm:02d}")
+            summaries = db.get_monthly_summaries(6)
+            txns = db.get_transactions(year_month=ym, limit=10)
+            Clock.schedule_once(lambda *_: self._apply(s, prev, py, pm, summaries, txns), 0)
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _apply(self, s, prev, prev_year, prev_month, summaries, txns):
         balance = s["balance"]
         self.ids.balance_label.text = f"${balance:,.2f}"
         self.ids.balance_label.text_color = (
@@ -295,17 +312,10 @@ class DashboardTab(MDBoxLayout):
         self.ids.income_label.text  = f"${s['income']:,.2f}"
         self.ids.expense_label.text = f"${s['expense']:,.2f}"
 
-        # Monthly comparison
-        self._update_comparison(db)
-
-        # Income vs Expense chart
+        self._apply_comparison(s, prev, prev_year, prev_month)
         self._update_income_expense_chart(s["income"], s["expense"])
+        self._apply_trend_chart(summaries)
 
-        # 6-month trend line
-        self._update_trend_chart(db)
-
-        # Recent transactions
-        txns = db.get_transactions(year_month=self._ym(), limit=10)
         self.ids.txn_list.clear_widgets()
         if txns:
             for t in txns:
@@ -319,26 +329,14 @@ class DashboardTab(MDBoxLayout):
                 padding=[0, dp(20)],
             ))
 
-    def _update_comparison(self, db):
-        """Show spending comparison vs previous month."""
-        # Get previous month
-        pm = self._month - 1
-        py = self._year
-        if pm <= 0:
-            pm = 12
-            py -= 1
-        prev_ym = f"{py:04d}-{pm:02d}"
-        prev = db.get_monthly_summary(prev_ym)
-        curr = db.get_monthly_summary(self._ym())
-
+    def _apply_comparison(self, curr, prev, prev_year, prev_month):
         curr_exp = curr["expense"]
         prev_exp = prev["expense"]
         diff = curr_exp - prev_exp
-
         try:
             if prev_exp > 0 and abs(diff) > 0.01:
                 pct = abs(diff) / prev_exp * 100
-                prev_label = date(py, pm, 1).strftime("%b")
+                prev_label = date(prev_year, prev_month, 1).strftime("%b")
                 if diff > 0:
                     self.ids.comparison_icon.icon = "trending-up"
                     self.ids.comparison_icon.text_color = (1, 0.45, 0.45, 1)
@@ -366,9 +364,8 @@ class DashboardTab(MDBoxLayout):
         chart.size_hint = (1, 1)
         container.add_widget(chart)
 
-    def _update_trend_chart(self, db):
+    def _apply_trend_chart(self, summaries):
         from utils.charts import MonthlyTrendLine
-        summaries = db.get_monthly_summaries(6)
         data_points = [(s["label"], s["expense"]) for s in summaries]
         container = self.ids.trend_chart
         container.clear_widgets()

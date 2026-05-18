@@ -2,6 +2,8 @@
 from __future__ import annotations
 from datetime import datetime, date
 
+import threading
+
 from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.metrics import dp
@@ -173,15 +175,16 @@ class GoalsTab(MDBoxLayout):
         Clock.schedule_once(self.refresh, 0.5)
 
     def refresh(self, *_):
-        try:
-            self._refresh_inner()
-        except Exception:
-            pass
+        def _fetch():
+            try:
+                from models.database import Database
+                goals = Database.get().get_goals()
+                Clock.schedule_once(lambda *_: self._apply(goals), 0)
+            except Exception:
+                pass
+        threading.Thread(target=_fetch, daemon=True).start()
 
-    def _refresh_inner(self):
-        from models.database import Database
-        db = Database.get()
-        goals = db.get_goals()
+    def _apply(self, goals):
 
         active = [g for g in goals if not g["completed"]]
         done   = [g for g in goals if g["completed"]]
