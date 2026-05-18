@@ -1,4 +1,4 @@
-"""Transaction list tab - scrollable history with month/type filter."""
+"""Transaction list tab - scrollable history with search, filter, and sort."""
 from __future__ import annotations
 from datetime import date, datetime
 
@@ -7,7 +7,7 @@ from kivy.lang import Builder
 from kivy.metrics import dp
 from kivy.properties import StringProperty
 from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.button import MDFlatButton, MDRaisedButton
+from kivymd.uix.button import MDFlatButton, MDIconButton, MDRaisedButton
 from kivymd.uix.card import MDCard
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.label import MDLabel
@@ -50,7 +50,7 @@ KV = """
         MDRaisedButton:
             id: month_btn
             text: root.filter_month_label
-            size_hint_x: 0.45
+            size_hint_x: 0.38
             height: dp(36)
             size_hint_y: None
             font_size: "12sp"
@@ -60,7 +60,7 @@ KV = """
         MDRaisedButton:
             id: type_btn
             text: root.filter_type_label
-            size_hint_x: 0.3
+            size_hint_x: 0.25
             height: dp(36)
             size_hint_y: None
             font_size: "12sp"
@@ -69,6 +69,16 @@ KV = """
                 [0.2, 0.65, 0.35, 1] if root.filter_type == 'income' else \
                 ([0.75, 0.25, 0.2, 1] if root.filter_type == 'expense' else \
                 app.theme_cls.primary_dark)
+
+        MDRaisedButton:
+            id: sort_btn
+            text: root.sort_label
+            size_hint_x: 0.25
+            height: dp(36)
+            size_hint_y: None
+            font_size: "12sp"
+            on_release: root.open_sort_menu(self)
+            md_bg_color: app.theme_cls.primary_dark
 
         MDLabel:
             id: count_label
@@ -93,12 +103,25 @@ KV = """
 
 Builder.load_string(KV)
 
+_SORT_OPTIONS = [
+    ("Date ↓",   "date",   True),
+    ("Date ↑",   "date",   False),
+    ("Amount ↓", "amount", True),
+    ("Amount ↑", "amount", False),
+    ("Name A→Z", "description", False),
+    ("Name Z→A", "description", True),
+]
+
 
 class TransactionListTab(MDBoxLayout):
     filter_month_label = StringProperty("")
     filter_type_label  = StringProperty("All")
     filter_type        = StringProperty("all")
+    sort_label         = StringProperty("Date ↓")
     _search_text       = ""
+    _sort_key          = "date"
+    _sort_desc         = True
+    _refresh_event     = None   # pending debounced refresh
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -117,14 +140,18 @@ class TransactionListTab(MDBoxLayout):
 
     def on_search_text(self, text: str):
         self._search_text = text.strip().lower()
-        self.refresh()
+        # Debounce: cancel any pending refresh and wait 350ms before firing
+        if self._refresh_event:
+            self._refresh_event.cancel()
+        self._refresh_event = Clock.schedule_once(lambda *_: self.refresh(), 0.35)
 
     def refresh(self, *_):
+        self._refresh_event = None
         from models.database import Database
         type_ = None if self.filter_type == "all" else self.filter_type
-        txns = Database.get().get_transactions(year_month=self._ym(), type_=type_, limit=200)
+        txns = Database.get().get_transactions(year_month=self._ym(), type_=type_, limit=500)
 
-        # Apply search filter
+        # Search filter
         if self._search_text:
             q = self._search_text
             txns = [
@@ -133,11 +160,21 @@ class TransactionListTab(MDBoxLayout):
                 or q in (t.get("category") or "").lower()
             ]
 
+        # Sort
+        reverse = self._sort_desc
+        key = self._sort_key
+        try:
+            txns = sorted(txns, key=lambda t: (t.get(key) or ""), reverse=reverse)
+        except Exception:
+            pass
+
         self.ids.count_label.text = f"{len(txns)} items"
-        self.ids.txn_list.clear_widgets()
+
+        lst = self.ids.txn_list
+        lst.clear_widgets()
 
         if not txns:
-            self.ids.txn_list.add_widget(MDLabel(
+            lst.add_widget(MDLabel(
                 text="No transactions found.",
                 halign="center",
                 theme_text_color="Secondary",
@@ -146,11 +183,21 @@ class TransactionListTab(MDBoxLayout):
             ))
             return
 
-        for t in txns:
-            self.ids.txn_list.add_widget(self._make_row(t))
+        # Build widgets in batches to avoid blocking the UI thread
+        self._build_rows(txns, 0)
+
+    def _build_rows(self, txns: list, start: int):
+        """Add rows in chunks so the UI stays responsive."""
+        CHUNK = 30
+        lst = self.ids.txn_list
+        for t in txns[start:start + CHUNK]:
+            lst.add_widget(self._make_row(t))
+        if start + CHUNK < len(txns):
+            Clock.schedule_once(
+                lambda *_: self._build_rows(txns, start + CHUNK), 0
+            )
 
     def _make_row(self, t: dict) -> MDCard:
-        from kivymd.uix.button import MDIconButton
         card = MDCard(
             orientation="horizontal",
             padding=[dp(8), dp(8)],
@@ -257,7 +304,6 @@ class TransactionListTab(MDBoxLayout):
                 m += 12
                 y -= 1
             label = date(y, m, 1).strftime("%B %Y")
-            ym = f"{y:04d}-{m:02d}"
             items.append({
                 "text": label,
                 "viewclass": "OneLineListItem",
@@ -271,4 +317,23 @@ class TransactionListTab(MDBoxLayout):
         self._year  = year
         self._month = month
         self.filter_month_label = label
+        self.refresh()
+
+    # ---------------------------------------------------------------- sort
+    def open_sort_menu(self, caller):
+        items = [
+            {
+                "text": label,
+                "viewclass": "OneLineListItem",
+                "on_release": lambda l=label, k=key, d=desc: self._pick_sort(l, k, d),
+            }
+            for label, key, desc in _SORT_OPTIONS
+        ]
+        menu = MDDropdownMenu(caller=caller, items=items, width_mult=3, max_height=dp(280))
+        menu.open()
+
+    def _pick_sort(self, label: str, key: str, desc: bool):
+        self._sort_key  = key
+        self._sort_desc = desc
+        self.sort_label = label
         self.refresh()
