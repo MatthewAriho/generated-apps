@@ -345,14 +345,23 @@ class BankConnectTab(MDBoxLayout):
 
     def _handle_plaid_callback(self, public_token: str = "", session_id: str = ""):
         """Called when the app receives a Plaid redirect."""
+        from main import ClearSpendApp
+        app = ClearSpendApp.get_running_app()
+        log = app._plaid_log if app else (lambda m: None)
+
+        log(f"_handle_plaid_callback session_id={session_id[:8]+'...' if session_id else 'NONE'} public_token={'set' if public_token else 'NONE'}")
+
         cfg = getattr(self, '_plaid_cfg', None) or self._get_plaid_config()
         if not cfg or not cfg.get("server_url"):
+            log("ERROR: Plaid server not configured")
             Snackbar(text="Plaid server not configured.").open()
             return
 
         # Use session_id from stored state if not passed directly
         if not session_id:
             session_id = getattr(self, '_plaid_session_id', "")
+            if session_id:
+                log(f"using stored session_id: {session_id[:8]}...")
 
         Snackbar(text="Connecting bank account...").open()
 
@@ -361,17 +370,22 @@ class BankConnectTab(MDBoxLayout):
                 from utils.bank_api import PlaidAPI
                 from models.database import Database
                 api = PlaidAPI(**cfg)
-                # Use complete-link flow if we have a session_id
                 if session_id:
+                    log(f"calling complete_link with session_id={session_id[:8]}...")
                     result = api.complete_link(session_id=session_id)
                 else:
+                    log("calling connect with public_token")
                     result = api.connect(public_token=public_token)
+
+                log(f"complete_link result keys={list(result.keys())} success={result.get('success')}")
 
                 if result.get("success"):
                     db = Database.get()
                     access_token = result.get("access_token", "")
                     item_id = result.get("item_id", "")
-                    for acc in result.get("accounts", []):
+                    accounts = result.get("accounts", [])
+                    log(f"got {len(accounts)} accounts, saving to DB")
+                    for acc in accounts:
                         db.add_bank_account(
                             bank_name="Plaid",
                             account_name=acc.get("name", "Account"),
@@ -385,10 +399,13 @@ class BankConnectTab(MDBoxLayout):
                         self.refresh()), 0)
                 else:
                     err = result.get('error', '')
+                    log(f"ERROR: complete_link failed: {err}")
                     Clock.schedule_once(lambda *_:
                         Snackbar(text=f"Connection failed: {err}").open(), 0)
             except Exception as e:
+                import traceback
                 msg = str(e)
+                log(f"EXCEPTION in _handle_plaid_callback._do: {msg}\n{traceback.format_exc()}")
                 Clock.schedule_once(lambda *_:
                     Snackbar(text=f"Plaid error: {msg}").open(), 0)
 

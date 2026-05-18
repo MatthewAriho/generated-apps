@@ -503,17 +503,18 @@ class ClearSpendApp(MDApp):
 
     def _process_plaid_token(self, code: str):
         """Route the Plaid session_id (or legacy public_token) to BankConnectTab."""
+        self._plaid_log(f"_process_plaid_token code={code[:8]}... starts_with_public={code.startswith('public-')}")
         try:
             bank_tab = self.root.ids.bank_tab
-            # Determine if this is a session_id or legacy public_token
-            # session_ids from secrets.token_urlsafe(16) are ~22 chars, URL-safe base64
-            # public_tokens start with 'public-'
+            self._plaid_log(f"bank_tab found: {bank_tab is not None}")
             if code.startswith("public-"):
                 bank_tab._handle_plaid_callback(public_token=code)
             else:
                 bank_tab._handle_plaid_callback(session_id=code)
             self.root.ids.nav.switch_tab("bank")
         except Exception as e:
+            import traceback
+            self._plaid_log(f"ERROR in _process_plaid_token: {e}\n{traceback.format_exc()}")
             from kivymd.uix.snackbar import Snackbar
             Snackbar(text=f"Plaid callback error: {e}").open()
 
