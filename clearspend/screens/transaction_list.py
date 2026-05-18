@@ -6,7 +6,9 @@ from datetime import date, datetime
 from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.metrics import dp
-from kivy.properties import StringProperty
+from kivy.properties import StringProperty, ObjectProperty
+from kivy.uix.recycleview import RecycleView
+from kivy.uix.recycleview.views import RecycleDataViewBehavior
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.button import MDFlatButton, MDIconButton, MDRaisedButton
 from kivymd.uix.card import MDCard
@@ -16,6 +18,68 @@ from kivymd.uix.menu import MDDropdownMenu
 from kivymd.uix.snackbar import Snackbar
 
 KV = """
+<TxnRow>:
+    orientation: 'horizontal'
+    padding: [dp(8), dp(4)]
+    spacing: dp(4)
+    size_hint_y: None
+    height: dp(66)
+    md_bg_color: app.theme_cls.bg_darkest
+    radius: [dp(10)]
+
+    MDBoxLayout:
+        orientation: 'vertical'
+        adaptive_height: True
+        size_hint_x: 1
+        spacing: dp(2)
+
+        MDLabel:
+            id: desc_label
+            text: root.desc
+            font_style: "Body1"
+            adaptive_height: True
+            shorten: True
+            shorten_from: "right"
+
+        MDLabel:
+            id: meta_label
+            text: root.meta
+            font_style: "Caption"
+            theme_text_color: "Secondary"
+            adaptive_height: True
+            shorten: True
+            shorten_from: "right"
+
+    MDLabel:
+        id: amt_label
+        text: root.amt
+        halign: "right"
+        theme_text_color: "Custom"
+        text_color: root.amt_color
+        font_style: "Subtitle1"
+        size_hint_x: None
+        width: dp(90)
+        size_hint_y: None
+        height: dp(66)
+
+    MDIconButton:
+        icon: "pencil-outline"
+        size_hint: None, None
+        size: dp(36), dp(36)
+        pos_hint: {"center_y": 0.5}
+        theme_text_color: "Custom"
+        text_color: 0.5, 0.8, 1, 1
+        on_release: root.on_edit()
+
+    MDIconButton:
+        icon: "delete-outline"
+        size_hint: None, None
+        size: dp(36), dp(36)
+        pos_hint: {"center_y": 0.5}
+        theme_text_color: "Custom"
+        text_color: 1, 0.45, 0.45, 1
+        on_release: root.on_delete()
+
 <TransactionListTab>:
     orientation: 'vertical'
     md_bg_color: app.theme_cls.bg_normal
@@ -24,7 +88,6 @@ KV = """
         title: "Transaction History"
         elevation: 2
 
-    # ── Search bar ────────────────────────────────────────────────────
     MDBoxLayout:
         size_hint_y: None
         height: dp(50)
@@ -40,7 +103,6 @@ KV = """
             icon_right: "magnify"
             on_text: root.on_search_text(self.text)
 
-    # ── Filter bar ────────────────────────────────────────────────────
     MDBoxLayout:
         size_hint_y: None
         height: self.minimum_height
@@ -89,40 +151,70 @@ KV = """
             halign: "right"
             adaptive_height: True
 
-    # ── List ──────────────────────────────────────────────────────────
-    ScrollView:
-        do_scroll_x: False
+    RecycleView:
+        id: rv
+        viewclass: "TxnRow"
+        scroll_type: ['bars', 'content']
+        bar_width: dp(4)
 
-        MDBoxLayout:
-            id: txn_list
-            orientation: 'vertical'
+        RecycleBoxLayout:
+            default_size: None, dp(74)
+            default_size_hint: 1, None
             size_hint_y: None
             height: self.minimum_height
-            padding: [dp(12), dp(8), dp(12), dp(12)]
+            orientation: 'vertical'
             spacing: dp(6)
+            padding: [dp(12), dp(8), dp(12), dp(12)]
 """
 
 Builder.load_string(KV)
 
 _SORT_OPTIONS = [
-    ("Date ↓",   "date",   True),
-    ("Date ↑",   "date",   False),
-    ("Amount ↓", "amount", True),
-    ("Amount ↑", "amount", False),
-    ("Name A→Z", "description", False),
-    ("Name Z→A", "description", True),
+    ("Date (new)",  "date",        True),
+    ("Date (old)",  "date",        False),
+    ("Amt (high)",  "amount",      True),
+    ("Amt (low)",   "amount",      False),
+    ("Name (A-Z)",  "description", False),
+    ("Name (Z-A)",  "description", True),
 ]
+
+
+class TxnRow(RecycleDataViewBehavior, MDCard):
+    """Single recycled transaction row."""
+    desc      = StringProperty("")
+    meta      = StringProperty("")
+    amt       = StringProperty("")
+    amt_color = ObjectProperty((1, 0.45, 0.45, 1))
+    _txn_id   = 0
+    _tab      = None   # set by TransactionListTab
+
+    def refresh_view_attrs(self, rv, index, data):
+        self.desc      = data.get("desc", "")
+        self.meta      = data.get("meta", "")
+        self.amt       = data.get("amt", "")
+        self.amt_color = data.get("amt_color", (1, 0.45, 0.45, 1))
+        self._txn_id   = data.get("txn_id", 0)
+        self._tab      = data.get("tab")
+        return super().refresh_view_attrs(rv, index, data)
+
+    def on_edit(self):
+        from kivy.app import App
+        App.get_running_app().go_to_edit(self._txn_id)
+
+    def on_delete(self):
+        if self._tab:
+            self._tab._on_delete(self._txn_id)
 
 
 class TransactionListTab(MDBoxLayout):
     filter_month_label = StringProperty("")
     filter_type_label  = StringProperty("All")
     filter_type        = StringProperty("all")
-    sort_label         = StringProperty("Date ↓")
+    sort_label         = StringProperty("Date (new)")
     _search_text       = ""
     _sort_key          = "date"
     _sort_desc         = True
-    _refresh_event     = None   # pending debounced refresh
+    _refresh_event     = None
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -132,8 +224,7 @@ class TransactionListTab(MDBoxLayout):
         self._update_month_label()
         Clock.schedule_once(self.refresh, 0.5)
 
-    # ----------------------------------------------------------------
-    def _ym(self) -> str:
+    def _ym(self):
         return f"{self._year:04d}-{self._month:02d}"
 
     def _update_month_label(self):
@@ -141,7 +232,6 @@ class TransactionListTab(MDBoxLayout):
 
     def on_search_text(self, text: str):
         self._search_text = text.strip().lower()
-        # Debounce: cancel any pending refresh and wait 350ms before firing
         if self._refresh_event:
             self._refresh_event.cancel()
         self._refresh_event = Clock.schedule_once(lambda *_: self.refresh(), 0.35)
@@ -149,9 +239,9 @@ class TransactionListTab(MDBoxLayout):
     def refresh(self, *_):
         self._refresh_event = None
         type_ = None if self.filter_type == "all" else self.filter_type
-        ym = self._ym()
-        search = self._search_text
-        key = self._sort_key
+        ym    = self._ym()
+        search  = self._search_text
+        key     = self._sort_key
         reverse = self._sort_desc
 
         def _fetch():
@@ -176,105 +266,29 @@ class TransactionListTab(MDBoxLayout):
 
     def _apply(self, txns):
         self.ids.count_label.text = f"{len(txns)} items"
-        lst = self.ids.txn_list
-        lst.clear_widgets()
-
-        if not txns:
-            lst.add_widget(MDLabel(
-                text="No transactions found.",
-                halign="center",
-                theme_text_color="Secondary",
-                adaptive_height=True,
-                padding=[0, dp(30)],
-            ))
-            return
-
-        self._build_rows(txns, 0)
-
-    def _build_rows(self, txns: list, start: int):
-        """Add rows in chunks so the UI stays responsive."""
-        CHUNK = 30
-        lst = self.ids.txn_list
-        for t in txns[start:start + CHUNK]:
-            lst.add_widget(self._make_row(t))
-        if start + CHUNK < len(txns):
-            Clock.schedule_once(
-                lambda *_: self._build_rows(txns, start + CHUNK), 0
-            )
-
-    def _make_row(self, t: dict) -> MDCard:
-        card = MDCard(
-            orientation="horizontal",
-            padding=[dp(8), dp(8)],
-            size_hint_y=None,
-            height=dp(66),
-            radius=[dp(10)],
-            ripple_behavior=False,
-        )
-        left = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(2), size_hint_x=1)
-        desc = (t.get("description") or t.get("category") or "-")[:32]
-        left.add_widget(MDLabel(text=desc, font_style="Body1", adaptive_height=True))
-        source_tag = f"  [{t.get('source','')}]" if t.get("source") != "manual" else ""
-        left.add_widget(MDLabel(
-            text=f"{t.get('category','')[:22]}{source_tag} | {t.get('date','')}",
-            font_style="Caption", theme_text_color="Secondary", adaptive_height=True,
-        ))
-
-        sign  = "+" if t["type"] == "income" else "-"
-        color = (0.4, 1, 0.55, 1) if t["type"] == "income" else (1, 0.45, 0.45, 1)
-        amt = MDLabel(
-            text=f"{sign}${t['amount']:,.2f}",
-            halign="right",
-            theme_text_color="Custom",
-            text_color=color,
-            font_style="Subtitle1",
-            size_hint_x=0.38,
-            size_hint_y=None,
-            height=dp(66),
-        )
-
-        txn_id = t["id"]
-        edit_btn = MDIconButton(
-            icon="pencil-outline",
-            size_hint=(None, None),
-            size=(dp(36), dp(36)),
-            pos_hint={"center_y": 0.5},
-            theme_text_color="Custom",
-            text_color=(0.5, 0.8, 1, 1),
-        )
-        edit_btn.bind(on_release=lambda *_, tid=txn_id: self._on_edit(tid))
-
-        del_btn = MDIconButton(
-            icon="delete-outline",
-            size_hint=(None, None),
-            size=(dp(36), dp(36)),
-            pos_hint={"center_y": 0.5},
-            theme_text_color="Custom",
-            text_color=(1, 0.45, 0.45, 1),
-        )
-        del_btn.bind(on_release=lambda *_, tid=txn_id: self._on_delete(tid))
-
-        card.add_widget(left)
-        card.add_widget(amt)
-        card.add_widget(edit_btn)
-        card.add_widget(del_btn)
-        return card
+        data = []
+        for t in txns:
+            sign      = "+" if t["type"] == "income" else "-"
+            color     = (0.4, 1, 0.55, 1) if t["type"] == "income" else (1, 0.45, 0.45, 1)
+            source_tag = f" [{t.get('source','')}]" if t.get("source") != "manual" else ""
+            data.append({
+                "desc":      (t.get("description") or t.get("category") or "-")[:40],
+                "meta":      f"{t.get('category','')[:22]}{source_tag} | {t.get('date','')}",
+                "amt":       f"{sign}${t['amount']:,.2f}",
+                "amt_color": color,
+                "txn_id":    t["id"],
+                "tab":       self,
+            })
+        self.ids.rv.data = data
 
     # ---------------------------------------------------------------- edit / delete
-    def _on_edit(self, txn_id: int):
-        from kivy.app import App
-        App.get_running_app().go_to_edit(txn_id)
-
     def _on_delete(self, txn_id: int):
         self._pending_delete_id = txn_id
         self._delete_dialog = MDDialog(
             title="Delete this transaction?",
             text="This action cannot be undone.",
             buttons=[
-                MDFlatButton(
-                    text="CANCEL",
-                    on_release=lambda *_: self._delete_dialog.dismiss(),
-                ),
+                MDFlatButton(text="CANCEL", on_release=lambda *_: self._delete_dialog.dismiss()),
                 MDRaisedButton(
                     text="DELETE",
                     md_bg_color=(0.85, 0.2, 0.2, 1),
@@ -293,14 +307,14 @@ class TransactionListTab(MDBoxLayout):
 
     # ---------------------------------------------------------------- filters
     def cycle_type_filter(self):
-        cycle = {"all": "expense", "expense": "income", "income": "all"}
+        cycle  = {"all": "expense", "expense": "income", "income": "all"}
         labels = {"all": "All", "expense": "Expense", "income": "Income"}
-        self.filter_type = cycle[self.filter_type]
+        self.filter_type       = cycle[self.filter_type]
         self.filter_type_label = labels[self.filter_type]
         self.refresh()
 
     def open_month_menu(self, caller):
-        now = datetime.now()
+        now   = datetime.now()
         items = []
         for delta in range(12):
             m = now.month - delta
@@ -314,11 +328,9 @@ class TransactionListTab(MDBoxLayout):
                 "viewclass": "OneLineListItem",
                 "on_release": lambda _y=y, _m=m, _l=label: self._pick_month(_y, _m, _l),
             })
+        MDDropdownMenu(caller=caller, items=items, width_mult=3, max_height=dp(320)).open()
 
-        menu = MDDropdownMenu(caller=caller, items=items, width_mult=3, max_height=dp(320))
-        menu.open()
-
-    def _pick_month(self, year: int, month: int, label: str):
+    def _pick_month(self, year, month, label):
         self._year  = year
         self._month = month
         self.filter_month_label = label
@@ -334,10 +346,9 @@ class TransactionListTab(MDBoxLayout):
             }
             for label, key, desc in _SORT_OPTIONS
         ]
-        menu = MDDropdownMenu(caller=caller, items=items, width_mult=3, max_height=dp(280))
-        menu.open()
+        MDDropdownMenu(caller=caller, items=items, width_mult=3, max_height=dp(280)).open()
 
-    def _pick_sort(self, label: str, key: str, desc: bool):
+    def _pick_sort(self, label, key, desc):
         self._sort_key  = key
         self._sort_desc = desc
         self.sort_label = label

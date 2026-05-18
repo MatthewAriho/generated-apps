@@ -537,10 +537,18 @@ class BankConnectTab(MDBoxLayout):
 
                 db.update_bank_sync_time(account_id)
 
+                # Auto-classify using rules engine
+                auto_classified = db.apply_classification_rules(account_id)
+
+                # Collect transactions still needing review (category=Other, source=plaid)
+                ambiguous = db.get_unclassified_transactions(bank_account_id=account_id)
+
                 removed_count = len(removed_ids)
                 msg = f"Synced {added} new"
                 if removed_count:
                     msg += f", {removed_count} removed"
+                if auto_classified:
+                    msg += f", {auto_classified} auto-classified"
 
                 def _ui_done(*_):
                     self.refresh()
@@ -548,6 +556,10 @@ class BankConnectTab(MDBoxLayout):
                     if app:
                         app.refresh_dashboard()
                     Snackbar(text=msg + ".").open()
+                    if ambiguous:
+                        Clock.schedule_once(
+                            lambda *_: self._prompt_classify(ambiguous[:5]), 0.8
+                        )
 
                 Clock.schedule_once(_ui_done, 0)
 
@@ -596,6 +608,70 @@ class BankConnectTab(MDBoxLayout):
             app.refresh_dashboard()
 
         Snackbar(text=f"Synced {added} new transaction(s).").open()
+
+    # ---------------------------------------------------------------- classification prompt
+    _CLASSIFY_OPTIONS = [
+        ("Expense",    "expense"),
+        ("Income",     "income"),
+        ("Transfer",   "transfer"),
+        ("Investment", "transfer"),
+        ("Rent",       "expense"),
+        ("Skip",       None),
+    ]
+
+    def _prompt_classify(self, txns: list):
+        """Show a dialog asking the user to classify the first unclassified transaction."""
+        if not txns:
+            return
+        t = txns[0]
+        remaining = txns[1:]
+        desc  = (t.get("description") or "Unknown")[:40]
+        amt   = f"${t.get('amount', 0):,.2f}"
+
+        _CATS = {
+            "Expense":    ("Other",          "expense"),
+            "Income":     ("Salary / Income","income"),
+            "Transfer":   ("Transfer",       "transfer"),
+            "Investment": ("Investment",     "transfer"),
+            "Rent":       ("Rent / Housing", "expense"),
+        }
+
+        dialog_ref = [None]
+
+        def _pick(label):
+            dialog_ref[0].dismiss()
+            if label == "Skip":
+                if remaining:
+                    Clock.schedule_once(lambda *_: self._prompt_classify(remaining), 0.3)
+                return
+            cat, typ = _CATS[label]
+            from models.database import Database
+            db = Database.get()
+            db.conn.execute(
+                "UPDATE transactions SET category=?, type=? WHERE id=?",
+                (cat, typ, t["id"]),
+            )
+            db.conn.commit()
+            # Save as user rule so future identical descriptions auto-classify
+            keyword = (t.get("description") or "").lower().strip()
+            if keyword:
+                db.save_user_rule(keyword, cat, typ)
+            if remaining:
+                Clock.schedule_once(lambda *_: self._prompt_classify(remaining), 0.3)
+
+        buttons = []
+        for label, _ in self._CLASSIFY_OPTIONS:
+            btn = MDFlatButton(text=label)
+            btn.bind(on_release=lambda *_, l=label: _pick(l))
+            buttons.append(btn)
+
+        dlg = MDDialog(
+            title="Classify transaction",
+            text=f"{desc}\n{amt}",
+            buttons=buttons,
+        )
+        dialog_ref[0] = dlg
+        dlg.open()
 
     @staticmethod
     def _get_app():

@@ -43,7 +43,7 @@ class Database:
             CREATE TABLE IF NOT EXISTS transactions (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 amount          REAL    NOT NULL,
-                type            TEXT    NOT NULL CHECK(type IN ('expense','income')),
+                type            TEXT    NOT NULL CHECK(type IN ('expense','income','transfer')),
                 category        TEXT,
                 description     TEXT,
                 date            TEXT    NOT NULL,
@@ -95,7 +95,7 @@ class Database:
         self.conn.commit()
 
     def _migrate_v2(self):
-        """Add Plaid-related columns if they do not exist yet."""
+        """Add Plaid-related columns and classification rules table if they do not exist yet."""
         def _has_column(table: str, column: str) -> bool:
             cur = self.conn.execute(f"PRAGMA table_info({table})")
             return any(row[1] == column for row in cur.fetchall())
@@ -113,8 +113,158 @@ class Database:
                 cursor TEXT NOT NULL DEFAULT '',
                 FOREIGN KEY (bank_account_id) REFERENCES bank_accounts(id)
             );
+
+            -- User-defined and built-in classification rules.
+            -- keyword is matched as a case-insensitive substring of description.
+            -- priority: user rules (source='user') beat built-in (source='builtin').
+            CREATE TABLE IF NOT EXISTS classification_rules (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                keyword  TEXT    NOT NULL COLLATE NOCASE,
+                category TEXT    NOT NULL,
+                type     TEXT    NOT NULL DEFAULT 'expense',
+                source   TEXT    NOT NULL DEFAULT 'builtin',
+                UNIQUE(keyword, source)
+            );
         """)
+        self._seed_classification_rules()
         self.conn.commit()
+
+    # Built-in rules — common Canadian/North American patterns
+    _BUILTIN_RULES = [
+        # Transfers / investments (type=transfer maps to expense=0 in display)
+        ("e-transfer",          "Transfer",        "transfer"),
+        ("interac",             "Transfer",        "transfer"),
+        ("transfer to",         "Transfer",        "transfer"),
+        ("transfer from",       "Transfer",        "income"),
+        ("tfsa",                "Investment",      "transfer"),
+        ("rrsp",                "Investment",      "transfer"),
+        ("resp",                "Investment",      "transfer"),
+        ("wealthsimple",        "Investment",      "transfer"),
+        ("questrade",           "Investment",      "transfer"),
+        ("fidelity",            "Investment",      "transfer"),
+        ("robinhood",           "Investment",      "transfer"),
+        # Housing
+        ("rent",                "Rent / Housing",  "expense"),
+        ("lease",               "Rent / Housing",  "expense"),
+        ("mortgage",            "Rent / Housing",  "expense"),
+        ("strata",              "Rent / Housing",  "expense"),
+        # Income
+        ("payroll",             "Salary / Income", "income"),
+        ("direct deposit",      "Salary / Income", "income"),
+        ("salary",              "Salary / Income", "income"),
+        ("paycheque",           "Salary / Income", "income"),
+        ("paycheck",            "Salary / Income", "income"),
+        # Subscriptions
+        ("netflix",             "Subscriptions",   "expense"),
+        ("spotify",             "Subscriptions",   "expense"),
+        ("apple.com/bill",      "Subscriptions",   "expense"),
+        ("google play",         "Subscriptions",   "expense"),
+        ("amazon prime",        "Subscriptions",   "expense"),
+        ("disney+",             "Subscriptions",   "expense"),
+        # Food
+        ("tim hortons",         "Food & Dining",   "expense"),
+        ("starbucks",           "Food & Dining",   "expense"),
+        ("mcdonalds",           "Food & Dining",   "expense"),
+        ("uber eats",           "Food & Dining",   "expense"),
+        ("doordash",            "Food & Dining",   "expense"),
+        ("skip the dishes",     "Food & Dining",   "expense"),
+        # Transport
+        ("ttc",                 "Transportation",  "expense"),
+        ("presto",              "Transportation",  "expense"),
+        ("uber",                "Rides (Uber/Lyft)", "expense"),
+        ("lyft",                "Rides (Uber/Lyft)", "expense"),
+        # Utilities
+        ("bell canada",         "Utilities",       "expense"),
+        ("rogers",              "Utilities",       "expense"),
+        ("telus",               "Utilities",       "expense"),
+        ("toronto hydro",       "Utilities",       "expense"),
+        ("enbridge",            "Utilities",       "expense"),
+        # Healthcare
+        ("shoppers drug",       "Healthcare",      "expense"),
+        ("goodlife",            "Healthcare",      "expense"),
+        ("goodlife fitness",    "Healthcare",      "expense"),
+        # ATM
+        ("atm withdrawal",      "ATM / Cash",      "expense"),
+        ("cash withdrawal",     "ATM / Cash",      "expense"),
+    ]
+
+    def _seed_classification_rules(self):
+        self.conn.executemany(
+            "INSERT OR IGNORE INTO classification_rules(keyword, category, type, source) VALUES(?,?,?,'builtin')",
+            [(kw, cat, typ) for kw, cat, typ in self._BUILTIN_RULES],
+        )
+
+    # --------------------------------------------------------- classification
+    def classify_description(self, description: str) -> tuple[str, str] | None:
+        """Return (category, type) for description based on rules, or None if no match.
+        User rules take priority over built-in rules."""
+        if not description:
+            return None
+        desc_lower = description.lower()
+        cur = self.conn.execute(
+            """SELECT category, type FROM classification_rules
+               ORDER BY CASE source WHEN 'user' THEN 0 ELSE 1 END, LENGTH(keyword) DESC"""
+        )
+        for row in cur.fetchall():
+            if row[0] and row[0].lower() in desc_lower or (row[0] and desc_lower.find(row[0].lower()) >= 0):
+                # match keyword against description
+                pass
+        # Redo properly: match keyword (not category) against description
+        cur = self.conn.execute(
+            """SELECT keyword, category, type FROM classification_rules
+               ORDER BY CASE source WHEN 'user' THEN 0 ELSE 1 END, LENGTH(keyword) DESC"""
+        )
+        for row in cur.fetchall():
+            keyword = (row[0] or "").lower()
+            if keyword and keyword in desc_lower:
+                return row[1], row[2]
+        return None
+
+    def save_user_rule(self, keyword: str, category: str, type_: str):
+        """Save a user classification rule. Overwrites existing user rule for same keyword."""
+        self.conn.execute(
+            """INSERT OR REPLACE INTO classification_rules(keyword, category, type, source)
+               VALUES(?, ?, ?, 'user')""",
+            (keyword.lower().strip(), category, type_),
+        )
+        self.conn.commit()
+
+    def get_unclassified_transactions(self, bank_account_id: int | None = None) -> list[dict]:
+        """Return transactions with category='Other' or type mismatches that need review."""
+        query = """SELECT * FROM transactions
+                   WHERE (category IS NULL OR category = '' OR category = 'Other')
+                   AND source != 'manual'"""
+        params: list = []
+        if bank_account_id is not None:
+            query += " AND bank_account_id = ?"
+            params.append(bank_account_id)
+        query += " ORDER BY date DESC LIMIT 50"
+        rows = self.conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+    def apply_classification_rules(self, bank_account_id: int | None = None) -> int:
+        """Apply classification rules to unclassified/Other transactions. Returns count updated."""
+        query = """SELECT id, description, category FROM transactions
+                   WHERE source != 'manual'"""
+        params: list = []
+        if bank_account_id is not None:
+            query += " AND bank_account_id = ?"
+            params.append(bank_account_id)
+        rows = self.conn.execute(query, params).fetchall()
+        updated = 0
+        for row in rows:
+            result = self.classify_description(row[1] or "")
+            if result:
+                new_cat, new_type = result
+                if new_cat != row[2]:
+                    self.conn.execute(
+                        "UPDATE transactions SET category=?, type=? WHERE id=?",
+                        (new_cat, new_type, row[0]),
+                    )
+                    updated += 1
+        if updated:
+            self.conn.commit()
+        return updated
 
     def _seed_categories(self):
         defaults = [
@@ -131,6 +281,9 @@ class Database:
             ("Subscriptions",      "refresh"),
             ("Salary / Income",    "briefcase"),
             ("Freelance",          "laptop"),
+            ("Rent / Housing",     "home"),
+            ("Investment",         "chart-line"),
+            ("Transfer",           "bank-transfer"),
             ("Other",              "dots-horizontal"),
         ]
         self.conn.executemany(
