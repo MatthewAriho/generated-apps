@@ -252,22 +252,47 @@ class BankConnectTab(MDBoxLayout):
 
         Snackbar(text="Preparing bank login...").open()
 
+        def _write_log(msg):
+            try:
+                import os
+                from kivy.utils import platform as kp
+                if kp == "android":
+                    try:
+                        from android.storage import app_storage_path
+                        base = app_storage_path()
+                    except Exception:
+                        base = os.path.expanduser("~")
+                else:
+                    base = os.path.join(os.path.expanduser("~"), ".clearspend")
+                os.makedirs(base, exist_ok=True)
+                with open(os.path.join(base, "plaid_debug.txt"), "a") as f:
+                    import datetime
+                    f.write(f"[{datetime.datetime.now()}] {msg}\n")
+            except Exception:
+                pass
+
         def _do():
             try:
                 from utils.bank_api import PlaidAPI
+                _write_log(f"Starting Plaid connect. server_url={cfg.get('server_url')} api_key={'set' if cfg.get('api_key') else 'empty'}")
                 api = PlaidAPI(**cfg)
+                _write_log("Calling create_link_token...")
                 resp = api.create_link_token()
                 url = resp.get("url", "")
+                _write_log(f"Got response: url={'present' if url else 'MISSING'} keys={list(resp.keys())}")
                 if not url:
                     Clock.schedule_once(lambda *_:
                         Snackbar(text="Failed to create link token.").open(), 0)
                     return
 
+                _write_log(f"Opening browser with URL: {url[:80]}...")
                 Clock.schedule_once(lambda *_, u=url: (
                     self._open_browser(u),
                     Snackbar(text="Opening bank login in browser...").open()), 0)
             except Exception as e:
+                import traceback
                 msg = str(e)
+                _write_log(f"ERROR: {msg}\n{traceback.format_exc()}")
                 Clock.schedule_once(lambda *_:
                     Snackbar(text=f"Plaid error: {msg}").open(), 0)
 
