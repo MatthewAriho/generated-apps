@@ -276,6 +276,19 @@ class BankConnectTab(MDBoxLayout):
     @staticmethod
     def _open_browser(url: str):
         """Open a URL in the system browser."""
+        from kivy.utils import platform as kp
+        if kp == "android":
+            try:
+                from jnius import autoclass
+                Intent = autoclass("android.content.Intent")
+                Uri = autoclass("android.net.Uri")
+                PythonActivity = autoclass("org.kivy.android.PythonActivity")
+                intent = Intent(Intent.ACTION_VIEW)
+                intent.setData(Uri.parse(url))
+                PythonActivity.mActivity.startActivity(intent)
+                return
+            except Exception:
+                pass
         import webbrowser
         webbrowser.open(url)
 
