@@ -89,6 +89,7 @@ def link_token():
         "products": ["transactions"],
         "country_codes": ["US", "CA"],
         "language": "en",
+        "redirect_uri": redirect_uri,
         "hosted_link": {
             "completion_redirect_uri": redirect_uri,
             "is_mobile_app": True,
