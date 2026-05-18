@@ -104,8 +104,11 @@ def link_token():
 
 @app.get("/plaid-callback")
 def plaid_callback():
-    public_token = request.args.get("public_token", "")
-    params = urlencode({"public_token": public_token}) if public_token else ""
+    # Log all params Plaid sends for debugging
+    all_params = dict(request.args)
+    app.logger.info(f"plaid-callback params: {all_params}")
+    # Forward ALL query params to the deep link
+    params = urlencode(all_params) if all_params else ""
     target = f"{DEEP_LINK}?{params}" if params else DEEP_LINK
     return redirect(target, code=302)
 
