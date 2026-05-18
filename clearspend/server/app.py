@@ -174,26 +174,27 @@ def complete_link():
         abort(400, description="Invalid or expired session_id")
 
     session = _sessions[session_id]
-    link_token_val = session.get("link_token", "")
-    if not link_token_val:
-        abort(400, description="No link_token for this session")
 
-    # Get the public_token from Plaid using the link_token
-    resp = _plaid_post("/link/token/get", {
-        **_auth(),
-        "link_token": link_token_val,
-    })
+    # Plaid Hosted Link includes public_token in the completion redirect URL.
+    # It's stored in callback_params by the /plaid-callback route.
+    callback_params = session.get("callback_params", {})
+    public_token = callback_params.get("public_token", "")
 
-    public_token = resp.get("metadata", {}).get("public_token", "")
-    if not public_token:
-        # Try direct field
-        public_token = resp.get("public_token", "")
-
-    app.logger.info(f"complete-link session={session_id} link_token_get keys={list(resp.keys())}")
+    app.logger.info(f"complete-link session={session_id} callback_params_keys={list(callback_params.keys())} public_token={'set' if public_token else 'MISSING'}")
 
     if not public_token:
-        # Return the raw response so the app can log it
-        abort(502, description=f"No public_token in response. Keys: {list(resp.keys())}")
+        # Fallback: try /link/token/get (may not work for all environments)
+        link_token_val = session.get("link_token", "")
+        if link_token_val:
+            try:
+                resp = _plaid_post("/link/token/get", {**_auth(), "link_token": link_token_val})
+                public_token = resp.get("metadata", {}).get("public_token", "") or resp.get("public_token", "")
+                app.logger.info(f"complete-link link_token_get keys={list(resp.keys())} public_token={'set' if public_token else 'MISSING'}")
+            except Exception as e:
+                app.logger.warning(f"complete-link link_token/get failed: {e}")
+
+    if not public_token:
+        abort(502, description=f"No public_token available. callback_params keys: {list(callback_params.keys())}")
 
     # Exchange public_token for access_token
     exchange = _plaid_post("/item/public_token/exchange", {
