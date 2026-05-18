@@ -100,7 +100,10 @@ def link_token():
 
     # Create a session ID to track this link attempt
     session_id = secrets.token_urlsafe(16)
-    redirect_uri = f"{server_url}/plaid-callback/{session_id}"
+    # redirect_uri must be a fixed URL registered in the Plaid dashboard.
+    # session_id is passed as a query param only in completion_redirect_uri.
+    oauth_redirect_uri = f"{server_url}/plaid-callback"
+    completion_uri = f"{server_url}/plaid-callback?session_id={session_id}"
 
     payload = {
         **_auth(),
@@ -109,9 +112,9 @@ def link_token():
         "products": ["transactions"],
         "country_codes": ["US", "CA"],
         "language": "en",
-        "redirect_uri": redirect_uri,
+        "redirect_uri": oauth_redirect_uri,
         "hosted_link": {
-            "completion_redirect_uri": redirect_uri,
+            "completion_redirect_uri": completion_uri,
             "is_mobile_app": True,
         },
     }
@@ -131,20 +134,33 @@ def link_token():
     return jsonify(url=url, session_id=session_id)
 
 
-@app.get("/plaid-callback/<session_id>")
-def plaid_callback(session_id):
+@app.get("/plaid-callback")
+def plaid_callback():
     all_params = dict(request.args)
-    app.logger.info(f"plaid-callback session={session_id} params={all_params}")
+    session_id = request.args.get("session_id", "")
+    oauth_state_id = request.args.get("oauth_state_id", "")
 
-    # Mark session as completed so the app can poll for it
-    if session_id in _sessions:
+    app.logger.info(f"plaid-callback session={session_id} oauth_state={oauth_state_id} params={all_params}")
+
+    if oauth_state_id and not session_id:
+        # OAuth re-entry: user's bank redirected back here mid-flow.
+        # Forward them back into the Plaid Hosted Link OAuth handler.
+        return redirect(
+            f"https://secure.plaid.com/oauth/idp_callback?oauth_state_id={oauth_state_id}",
+            code=302,
+        )
+
+    if session_id and session_id in _sessions:
         _sessions[session_id]["completed"] = True
         _sessions[session_id]["callback_params"] = all_params
 
-    # Redirect back to app
-    params = urlencode({"session_id": session_id})
-    target = f"{DEEP_LINK}?{params}"
-    return redirect(target, code=302)
+    if session_id:
+        # Redirect back to app with session_id
+        params = urlencode({"session_id": session_id})
+        target = f"{DEEP_LINK}?{params}"
+        return redirect(target, code=302)
+
+    return "OK", 200
 
 
 @app.post("/api/complete-link")
