@@ -191,7 +191,11 @@ class PlaidAPI(BankAPI):
         if self.api_key:
             req.add_header("X-API-Key", self.api_key)
         try:
-            with urlopen(req, timeout=20) as resp:
+            import ssl
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            with urlopen(req, timeout=20, context=ctx) as resp:
                 return json.loads(resp.read())
         except HTTPError as e:
             try:
