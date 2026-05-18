@@ -302,13 +302,18 @@ class BankConnectTab(MDBoxLayout):
     def _open_browser(url: str):
         """Open a URL in the system browser."""
         from kivy.utils import platform as kp
-        if kp == "android":
+
+        def _log(msg):
             try:
-                import subprocess
-                subprocess.Popen(['am', 'start', '-a', 'android.intent.action.VIEW', '-d', url])
-                return
+                import os, datetime
+                from android.storage import app_storage_path
+                base = app_storage_path()
+                with open(os.path.join(base, "plaid_debug.txt"), "a") as f:
+                    f.write(f"[{datetime.datetime.now()}] browser: {msg}\n")
             except Exception:
                 pass
+
+        if kp == "android":
             try:
                 from jnius import autoclass
                 Intent = autoclass("android.content.Intent")
@@ -317,9 +322,19 @@ class BankConnectTab(MDBoxLayout):
                 intent = Intent(Intent.ACTION_VIEW)
                 intent.setData(Uri.parse(url))
                 PythonActivity.mActivity.startActivity(intent)
+                _log("jnius Intent launched OK")
                 return
-            except Exception:
-                pass
+            except Exception as e:
+                _log(f"jnius failed: {e}")
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ['am', 'start', '-a', 'android.intent.action.VIEW', '-d', url],
+                    capture_output=True, text=True)
+                _log(f"am start: rc={result.returncode} out={result.stdout} err={result.stderr}")
+                return
+            except Exception as e:
+                _log(f"am start failed: {e}")
         import webbrowser
         webbrowser.open(url)
 
