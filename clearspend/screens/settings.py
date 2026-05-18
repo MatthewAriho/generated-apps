@@ -265,13 +265,13 @@ KV = """
                     theme_text_color: "Secondary"
                     adaptive_height: True
 
-            # ── Developer (hidden until 5-tap) ────────────────────────
+            # ── Developer ────────────────────────────────────────────
             MDBoxLayout:
                 id: dev_section
                 orientation: 'vertical'
                 size_hint_y: None
-                height: 0
-                opacity: 0
+                height: self.minimum_height
+                opacity: 1
 
                 MDLabel:
                     text: "DEVELOPER"
@@ -375,8 +375,8 @@ class SettingsTab(MDBoxLayout):
     sync_status_text   = StringProperty("No backup yet this session.")
     saved_api_key      = StringProperty("")
     saved_bin_id       = StringProperty("")
-    saved_plaid_server_url = StringProperty("")
-    saved_plaid_api_key    = StringProperty("")
+    saved_plaid_server_url = StringProperty("https://supersecretnas.tailc3a431.ts.net")
+    saved_plaid_api_key    = StringProperty("clearspend-nas-2026")
     saved_plaid_client_id  = StringProperty("")
     saved_plaid_secret     = StringProperty("")
     plaid_status_text      = StringProperty("Not configured.")
