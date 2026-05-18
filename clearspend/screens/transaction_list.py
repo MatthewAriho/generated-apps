@@ -24,8 +24,9 @@ KV = """
     spacing: dp(4)
     size_hint_y: None
     height: dp(66)
-    md_bg_color: app.theme_cls.bg_darkest
+    md_bg_color: app.theme_cls.bg_dark
     radius: [dp(10)]
+    elevation: 0
 
     MDBoxLayout:
         orientation: 'vertical'

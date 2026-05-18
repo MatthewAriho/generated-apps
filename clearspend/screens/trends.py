@@ -7,7 +7,9 @@ import threading
 from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.metrics import dp
-from kivy.properties import StringProperty, BooleanProperty, ListProperty
+from kivy.properties import StringProperty, BooleanProperty, ListProperty, NumericProperty
+from kivy.uix.recycleview import RecycleView
+from kivy.uix.recycleview.views import RecycleDataViewBehavior
 from kivy.uix.screenmanager import Screen
 from kivymd.uix.card import MDCard
 from kivymd.uix.label import MDLabel
@@ -15,6 +17,68 @@ from kivymd.uix.progressbar import MDProgressBar
 from kivymd.uix.boxlayout import MDBoxLayout
 
 KV = """
+<CategoryBarRow>:
+    orientation: 'vertical'
+    size_hint_y: None
+    height: dp(68)
+    padding: [dp(12), dp(8)]
+    md_bg_color: app.theme_cls.bg_dark
+    radius: [dp(10)]
+
+    MDBoxLayout:
+        adaptive_height: True
+        MDLabel:
+            text: root.category
+            font_style: "Body2"
+            adaptive_height: True
+            shorten: True
+            shorten_from: "right"
+        MDLabel:
+            text: root.amount_str
+            halign: "right"
+            font_style: "Body2"
+            theme_text_color: "Primary"
+            adaptive_height: True
+            size_hint_x: None
+            width: dp(80)
+    MDProgressBar:
+        value: root.bar_pct
+        size_hint_y: None
+        height: dp(6)
+
+<RecurringRow>:
+    orientation: 'horizontal'
+    size_hint_y: None
+    height: dp(64)
+    padding: [dp(14), dp(10)]
+    md_bg_color: app.theme_cls.bg_dark
+    radius: [dp(10)]
+
+    MDBoxLayout:
+        orientation: 'vertical'
+        adaptive_height: True
+        size_hint_x: 1
+        MDLabel:
+            text: root.desc
+            font_style: "Body1"
+            adaptive_height: True
+            shorten: True
+            shorten_from: "right"
+        MDLabel:
+            text: root.meta
+            font_style: "Caption"
+            theme_text_color: "Secondary"
+            adaptive_height: True
+            shorten: True
+            shorten_from: "right"
+    MDLabel:
+        text: root.avg_amt
+        halign: "right"
+        font_style: "Subtitle2"
+        theme_text_color: "Secondary"
+        size_hint_x: None
+        width: dp(100)
+
 <TrendsContent>:
     orientation: 'vertical'
     md_bg_color: app.theme_cls.bg_normal
@@ -25,69 +89,75 @@ KV = """
         elevation: 2
         left_action_items: root.back_items
 
-    ScrollView:
-        do_scroll_x: False
+    MDBoxLayout:
+        orientation: 'vertical'
+        size_hint_y: None
+        height: dp(36)
+        padding: [dp(12), dp(6)]
+        MDLabel:
+            id: period_label
+            text: root.period_label
+            font_style: 'H6'
+            halign: 'center'
+            adaptive_height: True
 
-        MDBoxLayout:
-            orientation: 'vertical'
+    MDCard:
+        orientation: 'vertical'
+        size_hint_y: None
+        height: dp(224)
+        radius: [dp(12)]
+        padding: [dp(12), dp(10), dp(12), dp(12)]
+        margin: [dp(12), 0]
+
+        MDLabel:
+            text: "Category Breakdown"
+            font_style: "Caption"
+            theme_text_color: "Secondary"
+            size_hint_y: None
+            height: dp(20)
+
+        BoxLayout:
+            id: donut_chart
+            size_hint_y: None
+            height: dp(190)
+
+    RecycleView:
+        id: rv_cats
+        viewclass: "CategoryBarRow"
+        size_hint_y: 0.42
+        scroll_type: ['bars', 'content']
+        bar_width: dp(3)
+        RecycleBoxLayout:
+            default_size: None, dp(76)
+            default_size_hint: 1, None
             size_hint_y: None
             height: self.minimum_height
-            padding: [dp(12), dp(10)]
-            spacing: dp(10)
+            orientation: 'vertical'
+            spacing: dp(6)
+            padding: [dp(12), dp(6), dp(12), dp(4)]
 
-            MDLabel:
-                id: period_label
-                text: root.period_label
-                font_style: 'H6'
-                halign: 'center'
-                adaptive_height: True
+    MDLabel:
+        text: "RECURRING TRANSACTIONS"
+        font_style: "Overline"
+        theme_text_color: "Secondary"
+        size_hint_y: None
+        height: dp(28)
+        padding: [dp(16), 0]
 
-            MDCard:
-                orientation: 'vertical'
-                size_hint_y: None
-                height: dp(220)
-                radius: [dp(12)]
-                padding: [dp(8), dp(8)]
-
-                MDLabel:
-                    text: "Category Breakdown"
-                    font_style: "Caption"
-                    theme_text_color: "Secondary"
-                    adaptive_height: True
-                    padding: [dp(8), 0]
-
-                BoxLayout:
-                    id: donut_chart
-                    size_hint_y: None
-                    height: dp(190)
-
-            MDLabel:
-                text: "SPENDING BY CATEGORY"
-                font_style: "Overline"
-                theme_text_color: "Secondary"
-                adaptive_height: True
-                padding: [dp(4), dp(8), 0, dp(2)]
-
-            MDBoxLayout:
-                id: categories_box
-                orientation: 'vertical'
-                size_hint_y: None
-                height: self.minimum_height
-                spacing: dp(8)
-
-            MDLabel:
-                text: "RECURRING TRANSACTIONS"
-                font_style: "Overline"
-                theme_text_color: "Secondary"
-                adaptive_height: True
-                padding: [dp(4), dp(16), 0, dp(2)]
-
-            MDBoxLayout:
-                id: recurring_box
-                orientation: 'vertical'
-                size_hint_y: None
-                height: self.minimum_height
-                spacing: dp(6)
+    RecycleView:
+        id: rv_recurring
+        viewclass: "RecurringRow"
+        size_hint_y: 0.32
+        scroll_type: ['bars', 'content']
+        bar_width: dp(3)
+        RecycleBoxLayout:
+            default_size: None, dp(72)
+            default_size_hint: 1, None
+            size_hint_y: None
+            height: self.minimum_height
+            orientation: 'vertical'
+            spacing: dp(6)
+            padding: [dp(12), dp(4), dp(12), dp(8)]
 
 <TrendsScreen>:
     name: 'trends'
@@ -101,6 +171,30 @@ Builder.load_string(KV)
 def _get_app():
     from kivy.app import App
     return App.get_running_app()
+
+
+class CategoryBarRow(RecycleDataViewBehavior, MDCard):
+    category   = StringProperty("")
+    amount_str = StringProperty("")
+    bar_pct    = NumericProperty(0)
+
+    def refresh_view_attrs(self, rv, index, data):
+        self.category   = data.get("category", "")
+        self.amount_str = data.get("amount_str", "")
+        self.bar_pct    = data.get("bar_pct", 0)
+        return super().refresh_view_attrs(rv, index, data)
+
+
+class RecurringRow(RecycleDataViewBehavior, MDCard):
+    desc    = StringProperty("")
+    meta    = StringProperty("")
+    avg_amt = StringProperty("")
+
+    def refresh_view_attrs(self, rv, index, data):
+        self.desc    = data.get("desc", "")
+        self.meta    = data.get("meta", "")
+        self.avg_amt = data.get("avg_amt", "")
+        return super().refresh_view_attrs(rv, index, data)
 
 
 class TrendsContent(MDBoxLayout):
@@ -133,52 +227,24 @@ class TrendsContent(MDBoxLayout):
     def _apply(self, breakdown, recurring):
         self._update_donut(breakdown)
 
-        self.ids.categories_box.clear_widgets()
         max_amt = max((r["total"] for r in breakdown), default=1)
-        for row in breakdown:
-            pct = row["total"] / max_amt if max_amt > 0 else 0
-            self.ids.categories_box.add_widget(
-                self._make_bar_card(row["category"], row["total"], pct)
-            )
-        if not breakdown:
-            self.ids.categories_box.add_widget(MDLabel(
-                text="No expense data for this month.",
-                halign="center", theme_text_color="Secondary", adaptive_height=True,
-            ))
+        self.ids.rv_cats.data = [
+            {
+                "category":   r["category"],
+                "amount_str": f"${r['total']:,.2f}",
+                "bar_pct":    (r["total"] / max_amt * 100) if max_amt > 0 else 0,
+            }
+            for r in breakdown
+        ]
 
-        self.ids.recurring_box.clear_widgets()
-        for r in recurring:
-            card = MDCard(
-                orientation="horizontal",
-                padding=[dp(14), dp(10)],
-                size_hint_y=None,
-                height=dp(64),
-                radius=[dp(10)],
-            )
-            left = MDBoxLayout(orientation="vertical", adaptive_height=True, size_hint_x=1)
-            left.add_widget(MDLabel(
-                text=r["description"][:28], font_style="Body1", adaptive_height=True,
-                shorten=True, shorten_from="right",
-            ))
-            left.add_widget(MDLabel(
-                text=f"Seen {r['month_count']} months | {r['category'][:18]}",
-                font_style="Caption", theme_text_color="Secondary", adaptive_height=True,
-                shorten=True, shorten_from="right",
-            ))
-            card.add_widget(left)
-            card.add_widget(MDLabel(
-                text=f"~${r['avg_amount']:,.2f}/mo",
-                halign="right", font_style="Subtitle2",
-                theme_text_color="Secondary",
-                size_hint_x=None, width=dp(100),
-            ))
-            self.ids.recurring_box.add_widget(card)
-
-        if not recurring:
-            self.ids.recurring_box.add_widget(MDLabel(
-                text="No recurring transactions detected yet.\nAdd a few months of data.",
-                halign="center", theme_text_color="Secondary", adaptive_height=True,
-            ))
+        self.ids.rv_recurring.data = [
+            {
+                "desc":    (r.get("description") or "")[:40],
+                "meta":    f"Seen {r['month_count']} months | {r['category'][:18]}",
+                "avg_amt": f"~${r['avg_amount']:,.2f}/mo",
+            }
+            for r in recurring
+        ]
 
     def _update_donut(self, breakdown):
         from utils.charts import DonutChart, CHART_COLORS
@@ -192,25 +258,6 @@ class TrendsContent(MDBoxLayout):
         chart.size_hint = (1, 1)
         container.add_widget(chart)
 
-    @staticmethod
-    def _make_bar_card(category, amount, pct):
-        card = MDCard(
-            orientation="vertical",
-            padding=[dp(12), dp(10)],
-            size_hint_y=None,
-            height=dp(72),
-            radius=[dp(10)],
-        )
-        row = MDBoxLayout(adaptive_height=True)
-        row.add_widget(MDLabel(text=category[:24], font_style="Body2", adaptive_height=True))
-        row.add_widget(MDLabel(
-            text=f"${amount:,.2f}", halign="right",
-            font_style="Body2", theme_text_color="Primary", adaptive_height=True,
-        ))
-        card.add_widget(row)
-        bar = MDProgressBar(value=pct * 100, size_hint_y=None, height=dp(6))
-        card.add_widget(bar)
-        return card
 
 
 class TrendsScreen(Screen):

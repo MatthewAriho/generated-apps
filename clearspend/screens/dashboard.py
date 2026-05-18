@@ -167,21 +167,22 @@ KV = """
                 MDCard:
                     orientation: 'vertical'
                     size_hint_y: None
-                    height: dp(150)
+                    height: dp(160)
                     radius: [dp(12)]
-                    padding: [dp(8), dp(8)]
+                    padding: [dp(12), dp(10), dp(12), dp(12)]
 
                     MDLabel:
                         text: "Income vs Expense"
                         font_style: "Caption"
                         theme_text_color: "Secondary"
-                        adaptive_height: True
-                        padding: [dp(8), 0]
+                        size_hint_y: None
+                        height: dp(20)
+                        padding: [0, 0]
 
                     BoxLayout:
                         id: income_expense_chart
                         size_hint_y: None
-                        height: dp(120)
+                        height: dp(118)
 
                 # ── 6-Month Trend ────────────────────────────────────
                 MDCard:
@@ -382,14 +383,15 @@ class DashboardTab(MDBoxLayout):
             radius=[dp(10)],
             ripple_behavior=True,
         )
-        left = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(2))
-        desc = (t.get("description") or t.get("category") or "-")[:30]
-        left.add_widget(MDLabel(
-            text=desc, font_style="Body1", adaptive_height=True,
-        ))
+        left = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(2), size_hint_x=1)
+        desc_lbl = MDLabel(font_style="Body1", adaptive_height=True,
+                           shorten=True, shorten_from="right", size_hint_x=1)
+        desc_lbl.text = (t.get("description") or t.get("category") or "-")
+        left.add_widget(desc_lbl)
         left.add_widget(MDLabel(
             text=f"{t.get('category','')[:20]} | {t.get('date','')}",
             font_style="Caption", theme_text_color="Secondary", adaptive_height=True,
+            shorten=True, shorten_from="right",
         ))
         sign = "+" if t["type"] == "income" else "-"
         color = (0.4, 1, 0.55, 1) if t["type"] == "income" else (1, 0.45, 0.45, 1)
@@ -399,7 +401,8 @@ class DashboardTab(MDBoxLayout):
             theme_text_color="Custom",
             text_color=color,
             font_style="Subtitle1",
-            size_hint_x=0.38,
+            size_hint_x=None,
+            width=dp(90),
         )
         card.add_widget(left)
         card.add_widget(amt)
