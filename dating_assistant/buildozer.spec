@@ -20,6 +20,7 @@ android.ndk_api = 26
 android.archs = arm64-v8a
 android.copy_libs = 1
 android.logcat_filters = *:S python:D
+p4a.branch = v2024.01.21
 
 [buildozer]
 log_level = 2
