@@ -27,6 +27,7 @@ from screens.trends            import TrendsContent           # noqa: F401
 from screens.budget            import BudgetContent           # noqa: F401
 from screens.goals             import GoalsTab              # noqa: F401
 from screens.pin_auth          import PinAuthScreen         # noqa: F401
+from screens.events            import EventsTab, EventDetailTab  # noqa: F401
 
 from utils.connectivity import is_online
 from utils.cloud_sync   import CloudSync
@@ -105,6 +106,15 @@ ScreenManager:
                         id: goals_tab
 
                 MDBottomNavigationItem:
+                    name: 'events'
+                    text: ' '
+                    icon: 'map-marker'
+                    on_tab_press: app.refresh_events()
+
+                    EventsTab:
+                        id: events_tab
+
+                MDBottomNavigationItem:
                     name: 'settings'
                     text: ' '
                     icon: 'cog'
@@ -117,6 +127,11 @@ ScreenManager:
 
     EditTransactionScreen:
         name: 'edit_transaction'
+
+    Screen:
+        name: 'event_detail'
+        EventDetailTab:
+            id: event_detail_tab
 
     PinAuthScreen:
         name: 'pin_auth'
@@ -545,6 +560,15 @@ class ClearSpendApp(MDApp):
     def refresh_trends(self, *_):    self._deferred("trends_tab")
     def refresh_budget(self, *_):    self._deferred("budget_tab")
     def refresh_goals(self, *_):     self._deferred("goals_tab")
+    def refresh_events(self, *_):    self._deferred("events_tab")
+
+    # ---------------------------------------------------------------- events navigation
+    def go_to_event(self, event_id: int):
+        self._push_history()
+        detail = self.root.get_screen("event_detail").ids.event_detail_tab
+        detail.load(event_id)
+        self.root.transition.direction = "left"
+        self.root.current = "event_detail"
 
 
 if __name__ == "__main__":

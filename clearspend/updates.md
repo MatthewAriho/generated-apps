@@ -1,6 +1,6 @@
 # ClearSpend – Pending Updates
 
-Last updated: 2026-05-18
+Last updated: 2026-05-20
 
 ---
 
@@ -67,7 +67,7 @@ Affected file: `screens/transaction_list.py`, `_SORT_OPTIONS` list.
 
 ---
 
-## 4. Event Expense Tracking ✅ (in progress)
+## 4. Event Expense Tracking ✅ (complete – v4.6)
 
 **Feature:** Group transactions under a named event (trip, wedding, etc.)
 
@@ -81,7 +81,7 @@ Affected file: `screens/transaction_list.py`, `_SORT_OPTIONS` list.
 
 **Files:** `models/database.py`, `screens/events.py`, `screens/edit_transaction.py`, `main.py`
 
-## 5. Financial Tips Engine ✅ (in progress)
+## 5. Financial Tips Engine ✅ (complete – v4.6)
 
 **Feature:** Rule-based tips shown on Dashboard based on spending patterns
 
