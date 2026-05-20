@@ -255,6 +255,24 @@ KV = """
                     height: self.minimum_height
                     spacing: dp(6)
 
+                # ── Financial tips ────────────────────────────────────
+                MDBoxLayout:
+                    size_hint_y: None
+                    height: self.minimum_height
+                    padding: [dp(4), dp(12), 0, 0]
+
+                    MDLabel:
+                        text: "Financial Tips"
+                        font_style: "Subtitle1"
+                        adaptive_height: True
+
+                MDBoxLayout:
+                    id: tips_list
+                    orientation: 'vertical'
+                    size_hint_y: None
+                    height: self.minimum_height
+                    spacing: dp(8)
+
         MDFloatingActionButton:
             icon: 'plus'
             pos_hint: {'right': 0.95, 'y': 0.02}
@@ -288,6 +306,7 @@ class DashboardTab(MDBoxLayout):
     def refresh(self, *_):
         def _fetch():
             from models.database import Database
+            from utils.tips import generate_tips
             db = Database.get()
             ym = self._ym()
             s = db.get_monthly_summary(ym)
@@ -300,11 +319,12 @@ class DashboardTab(MDBoxLayout):
             prev = db.get_monthly_summary(f"{py:04d}-{pm:02d}")
             summaries = db.get_monthly_summaries(6)
             txns = db.get_transactions(year_month=ym, limit=10)
-            Clock.schedule_once(lambda *_: self._apply(s, prev, py, pm, summaries, txns), 0)
+            tips = generate_tips(db)
+            Clock.schedule_once(lambda *_: self._apply(s, prev, py, pm, summaries, txns, tips), 0)
 
         threading.Thread(target=_fetch, daemon=True).start()
 
-    def _apply(self, s, prev, prev_year, prev_month, summaries, txns):
+    def _apply(self, s, prev, prev_year, prev_month, summaries, txns, tips):
         balance = s["balance"]
         self.ids.balance_label.text = f"${balance:,.2f}"
         self.ids.balance_label.text_color = (
@@ -329,6 +349,74 @@ class DashboardTab(MDBoxLayout):
                 adaptive_height=True,
                 padding=[0, dp(20)],
             ))
+
+        self._apply_tips(tips)
+
+    def _apply_tips(self, tips):
+        from kivymd.uix.button import MDIconButton
+        _SEVERITY_COLORS = {
+            "warn":  (0.85, 0.35, 0.15, 1),
+            "good":  (0.18, 0.65, 0.35, 1),
+            "info":  (0.20, 0.45, 0.75, 1),
+        }
+        box = self.ids.tips_list
+        box.clear_widgets()
+        for icon, title, body, severity in tips:
+            color = _SEVERITY_COLORS.get(severity, _SEVERITY_COLORS["info"])
+
+            title_lbl = MDLabel(
+                text=title, font_style="Body2", bold=True,
+                size_hint_y=None, height=dp(22),
+                shorten=True, shorten_from="right",
+                theme_text_color="Custom", text_color=(*color[:3], 1),
+            )
+            body_lbl = MDLabel(
+                text=body, font_style="Caption",
+                size_hint_y=None, height=dp(16),
+                theme_text_color="Secondary",
+            )
+            # Enable wrapping: bind width→text_size, then texture height→label height
+            def _bind(lbl):
+                def _on_w(inst, w):
+                    inst.text_size = (w, None)
+                def _on_tex(inst, ts):
+                    inst.height = ts[1]
+                lbl.bind(width=_on_w, texture_size=_on_tex)
+            _bind(body_lbl)
+            _bind(title_lbl)
+
+            text_box = MDBoxLayout(
+                orientation="vertical", size_hint_x=1, spacing=dp(2),
+                size_hint_y=None,
+            )
+            text_box.bind(minimum_height=text_box.setter("height"))
+            text_box.add_widget(title_lbl)
+            text_box.add_widget(body_lbl)
+
+            ico = MDIconButton(
+                icon=icon,
+                size_hint=(None, None),
+                size=(dp(36), dp(36)),
+                pos_hint={"center_y": 0.5},
+                theme_text_color="Custom",
+                text_color=color,
+            )
+
+            card = MDCard(
+                orientation="horizontal",
+                padding=[dp(8), dp(10)],
+                size_hint_y=None,
+                height=dp(72),
+                radius=[dp(10)],
+                md_bg_color=(*color[:3], 0.18),
+            )
+            # Grow card to fit text (text_box height + top+bottom padding)
+            text_box.bind(
+                height=lambda inst, h, c=card: setattr(c, "height", max(dp(56), h + dp(20)))
+            )
+            card.add_widget(ico)
+            card.add_widget(text_box)
+            box.add_widget(card)
 
     def _apply_comparison(self, curr, prev, prev_year, prev_month):
         curr_exp = curr["expense"]

@@ -565,7 +565,7 @@ class ClearSpendApp(MDApp):
     # ---------------------------------------------------------------- events navigation
     def go_to_event(self, event_id: int):
         self._push_history()
-        detail = self.root.get_screen("event_detail").ids.event_detail_tab
+        detail = self.root.ids.event_detail_tab
         detail.load(event_id)
         self.root.transition.direction = "left"
         self.root.current = "event_detail"
