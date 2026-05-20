@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""
-Dating Assistant App
-Powered by Claude AI — chat assistant, icebreakers, tracking, motivation
-"""
+"""Dating Assistant — KivyMD rewrite with proper chat UI."""
+
+from __future__ import annotations
+
+from kivy.config import Config
+Config.set("graphics", "width", "360")
+Config.set("graphics", "height", "800")
 
 import os
 import json
@@ -13,22 +16,23 @@ import urllib.error
 import random
 from datetime import datetime
 
-from kivy.app import App
-from kivy.lang import Builder
 from kivy.clock import Clock
 from kivy.core.window import Window
+from kivy.lang import Builder
 from kivy.metrics import dp
+from kivy.uix.widget import Widget
 from kivy.uix.popup import Popup
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.scrollview import ScrollView
-from kivy.uix.label import Label
-from kivy.uix.button import Button
-from kivy.uix.textinput import TextInput
-from kivy.uix.screenmanager import ScreenManager, Screen, NoTransition
 from kivy.uix.filechooser import FileChooserListView
-from kivy.graphics import Color, RoundedRectangle
+from kivy.uix.button import Button
 
-Window.clearcolor = (1, 1, 1, 1)
+from kivymd.app import MDApp
+from kivymd.uix.boxlayout import MDBoxLayout
+from kivymd.uix.button import MDFlatButton, MDIconButton, MDRaisedButton
+from kivymd.uix.card import MDCard
+from kivymd.uix.label import MDLabel
+from kivymd.uix.snackbar import Snackbar
+from kivymd.uix.textfield import MDTextField
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -98,6 +102,7 @@ def load_data():
         pass
     return {
         "api_key": "",
+        "provider": "gemini",
         "style_profile": "",
         "conversation_history": [],
         "successes": [],
@@ -134,8 +139,7 @@ def _make_ssl_context():
 
 def _http_post(url, headers, payload):
     req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
-    ctx = _make_ssl_context()
-    with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+    with urllib.request.urlopen(req, timeout=30, context=_make_ssl_context()) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -159,7 +163,7 @@ def _call_claude(api_key, messages, system, callback):
             text = result["content"][0]["text"]
             Clock.schedule_once(lambda dt: callback(text, None), 0)
         except urllib.error.HTTPError as e:
-            err = f"Claude API {e.code}: {e.read().decode()[:250]}"
+            err = f"HTTP {e.code}: {e.read().decode()[:200]}"
             Clock.schedule_once(lambda dt: callback(None, err), 0)
         except Exception as e:
             Clock.schedule_once(lambda dt: callback(None, str(e)), 0)
@@ -171,10 +175,8 @@ def _call_openai(api_key, messages, system, callback):
         try:
             oai_msgs = [{"role": "system", "content": system}]
             for m in messages:
-                role = m["role"]
                 content = m["content"]
                 if isinstance(content, list):
-                    # Convert Claude-style content blocks to OpenAI format
                     parts = []
                     for block in content:
                         if block.get("type") == "text":
@@ -184,39 +186,29 @@ def _call_openai(api_key, messages, system, callback):
                             parts.append({"type": "image_url", "image_url": {
                                 "url": f"data:{src['media_type']};base64,{src['data']}"
                             }})
-                    oai_msgs.append({"role": role, "content": parts})
+                    oai_msgs.append({"role": m["role"], "content": parts})
                 else:
-                    oai_msgs.append({"role": role, "content": content})
+                    oai_msgs.append({"role": m["role"], "content": content})
             result = _http_post(
                 "https://api.openai.com/v1/chat/completions",
-                {
-                    "Authorization": f"Bearer {api_key}",
-                    "content-type": "application/json",
-                },
-                json.dumps({
-                    "model": "gpt-4o-mini",
-                    "max_tokens": 1500,
-                    "messages": oai_msgs,
-                }).encode("utf-8"),
+                {"Authorization": f"Bearer {api_key}", "content-type": "application/json"},
+                json.dumps({"model": "gpt-4o-mini", "max_tokens": 1500,
+                            "messages": oai_msgs}).encode("utf-8"),
             )
             text = result["choices"][0]["message"]["content"]
             Clock.schedule_once(lambda dt: callback(text, None), 0)
         except urllib.error.HTTPError as e:
-            err = f"OpenAI API {e.code}: {e.read().decode()[:250]}"
+            err = f"HTTP {e.code}: {e.read().decode()[:200]}"
             Clock.schedule_once(lambda dt: callback(None, err), 0)
         except Exception as e:
             Clock.schedule_once(lambda dt: callback(None, str(e)), 0)
     threading.Thread(target=run, daemon=True).start()
 
 
-# (api_version, model_name) — try v1 stable first, v1beta as fallback
 GEMINI_MODELS = [
-    ("v1", "gemini-2.0-flash-lite"),
-    ("v1", "gemini-2.0-flash"),
-    ("v1", "gemini-1.5-flash"),
-    ("v1", "gemini-1.5-flash-002"),
-    ("v1beta", "gemini-2.0-flash-lite"),
-    ("v1beta", "gemini-2.0-flash"),
+    ("v1",     "gemini-2.0-flash-lite"),
+    ("v1",     "gemini-2.0-flash"),
+    ("v1",     "gemini-1.5-flash"),
     ("v1beta", "gemini-2.5-flash"),
     ("v1beta", "gemini-2.5-pro"),
 ]
@@ -225,8 +217,6 @@ GEMINI_MODELS = [
 def _call_gemini(api_key, messages, system, callback):
     def run():
         import time
-
-        # Convert messages to Gemini format once
         contents = []
         for m in messages:
             role = "model" if m["role"] == "assistant" else "user"
@@ -239,8 +229,7 @@ def _call_gemini(api_key, messages, system, callback):
                     elif block.get("type") == "image":
                         src = block["source"]
                         parts.append({"inline_data": {
-                            "mime_type": src["media_type"],
-                            "data": src["data"],
+                            "mime_type": src["media_type"], "data": src["data"],
                         }})
                 contents.append({"role": role, "parts": parts})
             else:
@@ -265,19 +254,14 @@ def _call_gemini(api_key, messages, system, callback):
                 return
             except urllib.error.HTTPError as e:
                 code = e.code
-                body_txt = ""
                 try:
                     body_txt = e.read().decode()[:150]
                 except Exception:
-                    pass
-                last_err = f"Gemini {code} ({api_ver}/{model}): {body_txt}"
+                    body_txt = ""
+                last_err = f"HTTP {code} ({api_ver}/{model}): {body_txt}"
                 if code == 429:
                     time.sleep(3)
-                    continue
-                elif code in (404, 400):
-                    # Model not found or not supported — try next
-                    continue
-                else:
+                elif code not in (404, 400):
                     break
             except Exception as e:
                 last_err = str(e)
@@ -289,7 +273,6 @@ def _call_gemini(api_key, messages, system, callback):
 
 
 def call_ai(provider, api_key, messages, system, callback):
-    """Dispatch to the selected AI provider."""
     if provider == 'claude':
         _call_claude(api_key, messages, system, callback)
     elif provider == 'openai':
@@ -301,597 +284,538 @@ def call_ai(provider, api_key, messages, system, callback):
 # ─── KV Layout ────────────────────────────────────────────────────────────────
 
 KV = """
-#:import NoTransition kivy.uix.screenmanager.NoTransition
-
-BoxLayout:
+MDBoxLayout:
     orientation: 'vertical'
+    md_bg_color: app.theme_cls.bg_normal
 
-    ScreenManager:
-        id: sm
-        transition: NoTransition()
+    MDBottomNavigation:
+        id: nav
+        transition_duration: 0.1
+        text_color_active: 1, 1, 1, 1
+        text_color_normal: 1, 1, 1, 0.55
+        panel_color: app.theme_cls.primary_color
 
-        Screen:
-            name: 'assistant'
-            BoxLayout:
+        # ── Chat ─────────────────────────────────────────────────────────────
+        MDBottomNavigationItem:
+            name: 'chat'
+            text: 'Chat'
+            icon: 'chat-outline'
+
+            MDBoxLayout:
                 orientation: 'vertical'
-                padding: '10dp'
-                spacing: '6dp'
+                md_bg_color: app.theme_cls.bg_normal
 
-                Label:
-                    text: 'Dating Assistant'
-                    color: (1, 0.42, 0.17, 1)
-                    font_size: '20sp'
-                    bold: True
-                    size_hint_y: None
-                    height: '38dp'
+                MDTopAppBar:
+                    title: "Dating Assistant"
+                    elevation: 2
+                    right_action_items: [["cog-outline", lambda x: app.go_to_settings()]]
 
                 ScrollView:
                     id: chat_scroll
                     do_scroll_x: False
-                    BoxLayout:
+
+                    MDBoxLayout:
                         id: chat_box
                         orientation: 'vertical'
+                        adaptive_height: True
+                        padding: [dp(8), dp(8)]
+                        spacing: dp(6)
+
+                # Image attachment bar — hidden until image selected
+                MDBoxLayout:
+                    id: img_bar
+                    size_hint_y: None
+                    height: dp(0)
+                    opacity: 0
+                    padding: [dp(12), dp(4)]
+                    spacing: dp(6)
+                    md_bg_color: app.theme_cls.bg_dark
+
+                    MDIconButton:
+                        icon: 'image-outline'
+                        size_hint: None, None
+                        size: dp(28), dp(28)
+                        theme_text_color: "Custom"
+                        text_color: app.theme_cls.primary_color
+
+                    MDLabel:
+                        id: img_name_label
+                        text: ''
+                        font_style: "Caption"
+                        adaptive_height: True
+                        size_hint_x: 1
+                        theme_text_color: "Secondary"
+
+                    MDIconButton:
+                        icon: 'close-circle'
+                        size_hint: None, None
+                        size: dp(28), dp(28)
+                        theme_text_color: "Custom"
+                        text_color: 0.78, 0.18, 0.18, 1
+                        on_release: app.clear_image()
+
+                # Input area
+                MDBoxLayout:
+                    orientation: 'vertical'
+                    size_hint_y: None
+                    height: dp(116)
+                    padding: [dp(8), dp(4), dp(8), dp(8)]
+                    spacing: dp(4)
+                    md_bg_color: app.theme_cls.bg_dark
+
+                    MDTextField:
+                        id: user_input
+                        hint_text: 'Ask for message ideas, tips, icebreakers...'
+                        mode: 'rectangle'
+                        multiline: True
                         size_hint_y: None
-                        height: self.minimum_height
-                        spacing: '6dp'
-                        padding: '2dp'
+                        height: dp(64)
+                        font_size: '14sp'
 
-                BoxLayout:
-                    size_hint_y: None
-                    height: '36dp'
-                    spacing: '6dp'
+                    MDBoxLayout:
+                        size_hint_y: None
+                        height: dp(36)
+                        spacing: dp(4)
 
-                    Button:
-                        text: 'Add Screenshot'
-                        size_hint_x: 0.45
-                        background_normal: ''
-                        background_color: (0.88, 0.88, 0.88, 1)
-                        color: (0.25, 0.25, 0.25, 1)
-                        font_size: '12sp'
-                        on_press: app.show_file_picker()
+                        MDIconButton:
+                            icon: 'image-plus'
+                            size_hint: None, None
+                            size: dp(36), dp(36)
+                            theme_text_color: "Custom"
+                            text_color: app.theme_cls.primary_color
+                            on_release: app.show_file_picker()
 
-                    Label:
-                        id: img_label
-                        text: 'No image attached'
-                        color: (0.6, 0.6, 0.6, 1)
-                        font_size: '11sp'
-                        halign: 'left'
-                        text_size: self.width, None
+                        MDFlatButton:
+                            text: 'Clear'
+                            size_hint_x: None
+                            width: dp(64)
+                            size_hint_y: None
+                            height: dp(36)
+                            theme_text_color: "Custom"
+                            text_color: 0.5, 0.5, 0.5, 1
+                            on_release: app.clear_chat()
 
-                TextInput:
-                    id: user_input
-                    hint_text: 'Ask for message ideas, conversation tips, icebreakers...'
-                    size_hint_y: None
-                    height: '78dp'
-                    multiline: True
-                    font_size: '14sp'
-                    background_color: (0.97, 0.97, 0.97, 1)
-                    foreground_color: (0.15, 0.15, 0.15, 1)
-                    padding: ['8dp', '8dp']
+                        Widget:
 
-                BoxLayout:
-                    size_hint_y: None
-                    height: '46dp'
-                    spacing: '8dp'
+                        MDRaisedButton:
+                            id: send_btn
+                            text: 'Send'
+                            size_hint_x: None
+                            width: dp(84)
+                            size_hint_y: None
+                            height: dp(36)
+                            font_size: '14sp'
+                            on_release: app.send_message()
 
-                    Button:
-                        text: 'Clear'
-                        size_hint_x: 0.22
-                        background_normal: ''
-                        background_color: (0.88, 0.88, 0.88, 1)
-                        color: (0.3, 0.3, 0.3, 1)
-                        font_size: '13sp'
-                        on_press: app.clear_chat()
-
-                    Button:
-                        id: send_btn
-                        text: 'Get Advice'
-                        size_hint_x: 0.78
-                        background_normal: ''
-                        background_color: (1, 0.42, 0.17, 1)
-                        color: (1, 1, 1, 1)
-                        font_size: '15sp'
-                        bold: True
-                        on_press: app.send_message()
-
-        Screen:
+        # ── Icebreakers ───────────────────────────────────────────────────────
+        MDBottomNavigationItem:
             name: 'icebreakers'
-            BoxLayout:
+            text: 'Openers'
+            icon: 'lightning-bolt-outline'
+
+            MDBoxLayout:
                 orientation: 'vertical'
-                padding: '12dp'
-                spacing: '10dp'
+                md_bg_color: app.theme_cls.bg_normal
 
-                Label:
-                    text: 'Icebreakers & Openers'
-                    color: (1, 0.42, 0.17, 1)
-                    font_size: '20sp'
-                    bold: True
+                MDTopAppBar:
+                    title: "Icebreakers & Openers"
+                    elevation: 2
+
+                MDBoxLayout:
+                    orientation: 'vertical'
                     size_hint_y: None
-                    height: '38dp'
+                    height: dp(130)
+                    padding: [dp(12), dp(8)]
+                    spacing: dp(8)
+                    md_bg_color: app.theme_cls.bg_dark
 
-                Label:
-                    text: 'Describe the situation or person (optional):'
-                    color: (0.4, 0.4, 0.4, 1)
-                    font_size: '13sp'
-                    size_hint_y: None
-                    height: '22dp'
-                    halign: 'left'
-                    text_size: self.width, None
-
-                TextInput:
-                    id: ice_context
-                    hint_text: 'e.g. "coffee shop, she is reading" or "Hinge match, loves hiking & dogs"'
-                    size_hint_y: None
-                    height: '72dp'
-                    multiline: True
-                    font_size: '14sp'
-                    background_color: (0.97, 0.97, 0.97, 1)
-                    foreground_color: (0.15, 0.15, 0.15, 1)
-                    padding: ['8dp', '8dp']
-
-                BoxLayout:
-                    size_hint_y: None
-                    height: '46dp'
-                    spacing: '6dp'
-
-                    Button:
-                        text: 'App Opener'
-                        background_normal: ''
-                        background_color: (1, 0.42, 0.17, 1)
-                        color: (1, 1, 1, 1)
+                    MDTextField:
+                        id: ice_context
+                        hint_text: 'Situation: e.g. "Hinge match, loves hiking & dogs"'
+                        mode: 'rectangle'
+                        size_hint_y: None
+                        height: dp(48)
                         font_size: '13sp'
-                        bold: True
-                        on_press: app.generate_opener('app')
 
-                    Button:
-                        text: 'In-Person'
-                        background_normal: ''
-                        background_color: (0.9, 0.22, 0.27, 1)
-                        color: (1, 1, 1, 1)
-                        font_size: '13sp'
-                        bold: True
-                        on_press: app.generate_opener('inperson')
+                    MDBoxLayout:
+                        size_hint_y: None
+                        height: dp(40)
+                        spacing: dp(6)
 
-                    Button:
-                        text: 'Date Ideas'
-                        background_normal: ''
-                        background_color: (0.22, 0.6, 0.42, 1)
-                        color: (1, 1, 1, 1)
-                        font_size: '13sp'
-                        bold: True
-                        on_press: app.generate_opener('date')
+                        MDRaisedButton:
+                            text: 'App Opener'
+                            size_hint_x: 1
+                            size_hint_y: None
+                            height: dp(38)
+                            font_size: '11sp'
+                            on_release: app.generate_opener('app')
+
+                        MDRaisedButton:
+                            text: 'In-Person'
+                            size_hint_x: 1
+                            size_hint_y: None
+                            height: dp(38)
+                            font_size: '11sp'
+                            md_bg_color: 0.85, 0.2, 0.25, 1
+                            on_release: app.generate_opener('inperson')
+
+                        MDRaisedButton:
+                            text: 'Date Ideas'
+                            size_hint_x: 1
+                            size_hint_y: None
+                            height: dp(38)
+                            font_size: '11sp'
+                            md_bg_color: 0.18, 0.6, 0.38, 1
+                            on_release: app.generate_opener('date')
 
                 ScrollView:
                     do_scroll_x: False
-                    BoxLayout:
+                    MDBoxLayout:
                         id: ice_box
                         orientation: 'vertical'
-                        size_hint_y: None
-                        height: self.minimum_height
-                        padding: '4dp'
-                        spacing: '4dp'
+                        adaptive_height: True
+                        padding: [dp(12), dp(8)]
+                        spacing: dp(8)
 
-        Screen:
+        # ── Track ─────────────────────────────────────────────────────────────
+        MDBottomNavigationItem:
             name: 'track'
-            BoxLayout:
+            text: 'Track'
+            icon: 'chart-line'
+
+            MDBoxLayout:
                 orientation: 'vertical'
-                padding: '12dp'
-                spacing: '8dp'
+                md_bg_color: app.theme_cls.bg_normal
 
-                Label:
-                    text: 'Track Your Results'
-                    color: (1, 0.42, 0.17, 1)
-                    font_size: '20sp'
-                    bold: True
+                MDTopAppBar:
+                    title: "Track Results"
+                    elevation: 2
+
+                MDBoxLayout:
+                    orientation: 'vertical'
                     size_hint_y: None
-                    height: '38dp'
+                    height: dp(160)
+                    padding: [dp(12), dp(8)]
+                    spacing: dp(8)
+                    md_bg_color: app.theme_cls.bg_dark
 
-                TextInput:
-                    id: track_note
-                    hint_text: 'What happened? What did you try? (optional)'
+                    MDTextField:
+                        id: track_note
+                        hint_text: 'What happened? What did you try?'
+                        mode: 'rectangle'
+                        multiline: True
+                        size_hint_y: None
+                        height: dp(64)
+                        font_size: '13sp'
+
+                    MDBoxLayout:
+                        size_hint_y: None
+                        height: dp(40)
+                        spacing: dp(8)
+
+                        MDRaisedButton:
+                            text: 'Log a Win!'
+                            size_hint_x: 1
+                            size_hint_y: None
+                            height: dp(38)
+                            font_size: '13sp'
+                            md_bg_color: 0.18, 0.68, 0.38, 1
+                            on_release: app.log_result('success')
+
+                        MDRaisedButton:
+                            text: "Didn't Work"
+                            size_hint_x: 1
+                            size_hint_y: None
+                            height: dp(38)
+                            font_size: '13sp'
+                            md_bg_color: 0.85, 0.2, 0.25, 1
+                            on_release: app.log_result('failure')
+
+                MDBoxLayout:
                     size_hint_y: None
-                    height: '72dp'
-                    multiline: True
-                    font_size: '14sp'
-                    background_color: (0.97, 0.97, 0.97, 1)
-                    foreground_color: (0.15, 0.15, 0.15, 1)
-                    padding: ['8dp', '8dp']
+                    height: dp(38)
+                    padding: [dp(16), dp(4)]
 
-                BoxLayout:
-                    size_hint_y: None
-                    height: '46dp'
-                    spacing: '8dp'
-
-                    Button:
-                        text: 'Log a Win!'
-                        background_normal: ''
-                        background_color: (0.18, 0.68, 0.38, 1)
-                        color: (1, 1, 1, 1)
-                        font_size: '14sp'
-                        bold: True
-                        on_press: app.log_result('success')
-
-                    Button:
-                        text: "Didn't Work"
-                        background_normal: ''
-                        background_color: (0.9, 0.22, 0.27, 1)
-                        color: (1, 1, 1, 1)
-                        font_size: '14sp'
-                        bold: True
-                        on_press: app.log_result('failure')
-
-                BoxLayout:
-                    size_hint_y: None
-                    height: '34dp'
-                    spacing: '8dp'
-
-                    Label:
+                    MDLabel:
                         id: wins_label
                         text: 'Wins: 0'
-                        color: (0.18, 0.68, 0.38, 1)
-                        font_size: '15sp'
+                        theme_text_color: "Custom"
+                        text_color: 0.18, 0.68, 0.38, 1
+                        font_style: "Subtitle1"
                         bold: True
+                        halign: 'center'
+                        adaptive_height: True
 
-                    Label:
+                    MDLabel:
                         id: fails_label
                         text: 'Learning: 0'
-                        color: (0.9, 0.22, 0.27, 1)
-                        font_size: '15sp'
+                        theme_text_color: "Custom"
+                        text_color: 0.85, 0.2, 0.25, 1
+                        font_style: "Subtitle1"
                         bold: True
+                        halign: 'center'
+                        adaptive_height: True
 
                 ScrollView:
                     do_scroll_x: False
-                    BoxLayout:
+                    MDBoxLayout:
                         id: track_box
                         orientation: 'vertical'
-                        size_hint_y: None
-                        height: self.minimum_height
-                        spacing: '5dp'
-                        padding: '2dp'
+                        adaptive_height: True
+                        padding: [dp(12), dp(8)]
+                        spacing: dp(6)
 
-        Screen:
-            name: 'motivation'
-            BoxLayout:
-                orientation: 'vertical'
-                padding: '14dp'
-                spacing: '14dp'
-
-                Label:
-                    text: 'Get Out There!'
-                    color: (1, 0.42, 0.17, 1)
-                    font_size: '22sp'
-                    bold: True
-                    size_hint_y: None
-                    height: '42dp'
-
-                BoxLayout:
-                    orientation: 'vertical'
-                    size_hint_y: None
-                    height: '160dp'
-                    padding: '14dp'
-                    canvas.before:
-                        Color:
-                            rgba: (1, 0.96, 0.93, 1)
-                        RoundedRectangle:
-                            pos: self.pos
-                            size: self.size
-                            radius: [12]
-
-                    Label:
-                        id: quote_label
-                        text: ''
-                        color: (0.18, 0.18, 0.18, 1)
-                        font_size: '15sp'
-                        text_size: self.width, None
-                        halign: 'center'
-                        valign: 'middle'
-
-                Button:
-                    text: 'Shuffle Inspiration'
-                    size_hint_y: None
-                    height: '46dp'
-                    background_normal: ''
-                    background_color: (1, 0.42, 0.17, 1)
-                    color: (1, 1, 1, 1)
-                    font_size: '15sp'
-                    bold: True
-                    on_press: app.shuffle_quote()
-
-                Label:
-                    text: "Therapist's Corner"
-                    color: (0.9, 0.22, 0.27, 1)
-                    font_size: '16sp'
-                    bold: True
-                    size_hint_y: None
-                    height: '30dp'
-                    halign: 'left'
-                    text_size: self.width, None
-
-                BoxLayout:
-                    orientation: 'vertical'
-                    size_hint_y: None
-                    height: '150dp'
-                    padding: '14dp'
-                    canvas.before:
-                        Color:
-                            rgba: (1, 0.93, 0.94, 1)
-                        RoundedRectangle:
-                            pos: self.pos
-                            size: self.size
-                            radius: [12]
-
-                    Label:
-                        id: therapy_label
-                        text: ''
-                        color: (0.3, 0.1, 0.12, 1)
-                        font_size: '13sp'
-                        text_size: self.width, None
-                        halign: 'center'
-                        valign: 'middle'
-
-                Button:
-                    text: 'New Insight'
-                    size_hint_y: None
-                    height: '46dp'
-                    background_normal: ''
-                    background_color: (0.9, 0.22, 0.27, 1)
-                    color: (1, 1, 1, 1)
-                    font_size: '15sp'
-                    bold: True
-                    on_press: app.shuffle_therapy()
-
-                Widget:
-
-        Screen:
-            name: 'settings'
-            BoxLayout:
-                orientation: 'vertical'
-                padding: '14dp'
-                spacing: '10dp'
-
-                Label:
-                    text: 'Settings'
-                    color: (1, 0.42, 0.17, 1)
-                    font_size: '20sp'
-                    bold: True
-                    size_hint_y: None
-                    height: '38dp'
-
-                Label:
-                    text: 'AI Provider:'
-                    color: (0.35, 0.35, 0.35, 1)
-                    font_size: '13sp'
-                    size_hint_y: None
-                    height: '22dp'
-                    halign: 'left'
-                    text_size: self.width, None
-
-                BoxLayout:
-                    size_hint_y: None
-                    height: '46dp'
-                    spacing: '6dp'
-
-                    Button:
-                        id: btn_gemini
-                        text: 'Gemini'
-                        background_normal: ''
-                        background_color: (1, 0.42, 0.17, 1)
-                        color: (1, 1, 1, 1)
-                        font_size: '14sp'
-                        bold: True
-                        on_press: app.set_provider('gemini')
-
-                    Button:
-                        id: btn_claude
-                        text: 'Claude'
-                        background_normal: ''
-                        background_color: (0.88, 0.88, 0.88, 1)
-                        color: (0.3, 0.3, 0.3, 1)
-                        font_size: '14sp'
-                        on_press: app.set_provider('claude')
-
-                    Button:
-                        id: btn_openai
-                        text: 'OpenAI'
-                        background_normal: ''
-                        background_color: (0.88, 0.88, 0.88, 1)
-                        color: (0.3, 0.3, 0.3, 1)
-                        font_size: '14sp'
-                        on_press: app.set_provider('openai')
-
-                Label:
-                    id: provider_note
-                    text: 'Free tier available — get key at aistudio.google.com'
-                    color: (0.22, 0.6, 0.35, 1)
-                    font_size: '12sp'
-                    size_hint_y: None
-                    height: '22dp'
-                    halign: 'left'
-                    text_size: self.width, None
-
-                Label:
-                    text: 'API Key:'
-                    color: (0.35, 0.35, 0.35, 1)
-                    font_size: '13sp'
-                    size_hint_y: None
-                    height: '22dp'
-                    halign: 'left'
-                    text_size: self.width, None
-
-                TextInput:
-                    id: api_key_input
-                    hint_text: 'Get free key at aistudio.google.com'
-                    size_hint_y: None
-                    height: '46dp'
-                    multiline: False
-                    password: True
-                    font_size: '13sp'
-                    background_color: (0.97, 0.97, 0.97, 1)
-                    foreground_color: (0.15, 0.15, 0.15, 1)
-                    padding: ['8dp', '12dp']
-
-                Button:
-                    text: 'Save Settings'
-                    size_hint_y: None
-                    height: '46dp'
-                    background_normal: ''
-                    background_color: (1, 0.42, 0.17, 1)
-                    color: (1, 1, 1, 1)
-                    font_size: '14sp'
-                    bold: True
-                    on_press: app.save_api_key()
-
-                Label:
-                    id: settings_status
-                    text: ''
-                    color: (0.18, 0.6, 0.3, 1)
-                    font_size: '13sp'
-                    size_hint_y: None
-                    height: '26dp'
-
-                Label:
-                    text: 'My Style Profile'
-                    color: (1, 0.42, 0.17, 1)
-                    font_size: '15sp'
-                    bold: True
-                    size_hint_y: None
-                    height: '30dp'
-                    halign: 'left'
-                    text_size: self.width, None
-
-                Label:
-                    text: 'Tell the assistant about you and what you are looking for:'
-                    color: (0.4, 0.4, 0.4, 1)
-                    font_size: '12sp'
-                    size_hint_y: None
-                    height: '22dp'
-                    halign: 'left'
-                    text_size: self.width, None
-
-                TextInput:
-                    id: style_input
-                    hint_text: 'e.g. "I am a 28M, funny and laid back, looking for something serious. I tend to be a bit shy at first..."'
-                    size_hint_y: None
-                    height: '110dp'
-                    multiline: True
-                    font_size: '13sp'
-                    background_color: (0.97, 0.97, 0.97, 1)
-                    foreground_color: (0.15, 0.15, 0.15, 1)
-                    padding: ['8dp', '8dp']
-
-                Button:
-                    text: 'Save Style Profile'
-                    size_hint_y: None
-                    height: '46dp'
-                    background_normal: ''
-                    background_color: (0.9, 0.22, 0.27, 1)
-                    color: (1, 1, 1, 1)
-                    font_size: '14sp'
-                    bold: True
-                    on_press: app.save_style_profile()
-
-                Widget:
-
-    # Bottom Navigation Bar
-    BoxLayout:
-        size_hint_y: None
-        height: '54dp'
-        canvas.before:
-            Color:
-                rgba: (0.95, 0.95, 0.95, 1)
-            Rectangle:
-                pos: self.pos
-                size: self.size
-
-        Button:
-            id: nav_assistant
-            text: 'Assistant'
-            background_normal: ''
-            background_color: (1, 0.42, 0.17, 1)
-            color: (1, 1, 1, 1)
-            font_size: '11sp'
-            bold: True
-            on_press: app.switch_screen('assistant')
-
-        Button:
-            id: nav_ice
-            text: 'Icebreakers'
-            background_normal: ''
-            background_color: (0.95, 0.95, 0.95, 1)
-            color: (0.45, 0.45, 0.45, 1)
-            font_size: '10sp'
-            on_press: app.switch_screen('icebreakers')
-
-        Button:
-            id: nav_track
-            text: 'Track'
-            background_normal: ''
-            background_color: (0.95, 0.95, 0.95, 1)
-            color: (0.45, 0.45, 0.45, 1)
-            font_size: '11sp'
-            on_press: app.switch_screen('track')
-
-        Button:
-            id: nav_motive
+        # ── Motivate ──────────────────────────────────────────────────────────
+        MDBottomNavigationItem:
+            name: 'motivate'
             text: 'Motivate'
-            background_normal: ''
-            background_color: (0.95, 0.95, 0.95, 1)
-            color: (0.45, 0.45, 0.45, 1)
-            font_size: '11sp'
-            on_press: app.switch_screen('motivation')
+            icon: 'fire'
 
-        Button:
-            id: nav_settings
+            MDBoxLayout:
+                orientation: 'vertical'
+                md_bg_color: app.theme_cls.bg_normal
+
+                MDTopAppBar:
+                    title: "Get Out There!"
+                    elevation: 2
+
+                ScrollView:
+                    do_scroll_x: False
+                    MDBoxLayout:
+                        orientation: 'vertical'
+                        adaptive_height: True
+                        padding: [dp(14), dp(14)]
+                        spacing: dp(14)
+
+                        MDCard:
+                            orientation: 'vertical'
+                            size_hint_y: None
+                            height: dp(140)
+                            radius: [dp(12)]
+                            padding: [dp(18), dp(14)]
+                            md_bg_color: 1, 0.96, 0.92, 1
+                            elevation: 1
+
+                            MDLabel:
+                                id: quote_label
+                                text: ''
+                                font_style: "Subtitle1"
+                                theme_text_color: "Custom"
+                                text_color: 0.18, 0.12, 0.08, 1
+                                halign: 'center'
+                                valign: 'middle'
+                                text_size: self.width, None
+
+                        MDRaisedButton:
+                            text: 'Shuffle Inspiration'
+                            size_hint_x: 1
+                            size_hint_y: None
+                            height: dp(46)
+                            on_release: app.shuffle_quote()
+
+                        MDLabel:
+                            text: "Therapist's Corner"
+                            font_style: "H6"
+                            theme_text_color: "Custom"
+                            text_color: 0.78, 0.15, 0.20, 1
+                            adaptive_height: True
+
+                        MDCard:
+                            orientation: 'vertical'
+                            size_hint_y: None
+                            height: dp(140)
+                            radius: [dp(12)]
+                            padding: [dp(18), dp(14)]
+                            md_bg_color: 1, 0.93, 0.93, 1
+                            elevation: 1
+
+                            MDLabel:
+                                id: therapy_label
+                                text: ''
+                                font_style: "Body1"
+                                theme_text_color: "Custom"
+                                text_color: 0.30, 0.10, 0.12, 1
+                                halign: 'center'
+                                valign: 'middle'
+                                text_size: self.width, None
+
+                        MDRaisedButton:
+                            text: 'New Insight'
+                            size_hint_x: 1
+                            size_hint_y: None
+                            height: dp(46)
+                            md_bg_color: 0.78, 0.15, 0.20, 1
+                            on_release: app.shuffle_therapy()
+
+        # ── Settings ──────────────────────────────────────────────────────────
+        MDBottomNavigationItem:
+            name: 'settings'
             text: 'Settings'
-            background_normal: ''
-            background_color: (0.95, 0.95, 0.95, 1)
-            color: (0.45, 0.45, 0.45, 1)
-            font_size: '11sp'
-            on_press: app.switch_screen('settings')
+            icon: 'cog-outline'
+
+            MDBoxLayout:
+                orientation: 'vertical'
+                md_bg_color: app.theme_cls.bg_normal
+
+                MDTopAppBar:
+                    title: "Settings"
+                    elevation: 2
+
+                ScrollView:
+                    do_scroll_x: False
+                    MDBoxLayout:
+                        orientation: 'vertical'
+                        adaptive_height: True
+                        padding: [dp(14), dp(12)]
+                        spacing: dp(10)
+
+                        MDLabel:
+                            text: 'AI Provider'
+                            font_style: "Subtitle2"
+                            bold: True
+                            adaptive_height: True
+                            theme_text_color: "Secondary"
+
+                        MDBoxLayout:
+                            size_hint_y: None
+                            height: dp(44)
+                            spacing: dp(8)
+
+                            MDRaisedButton:
+                                id: btn_gemini
+                                text: 'Gemini'
+                                size_hint_x: 1
+                                size_hint_y: None
+                                height: dp(40)
+                                font_size: '13sp'
+                                on_release: app.set_provider('gemini')
+
+                            MDRaisedButton:
+                                id: btn_claude
+                                text: 'Claude'
+                                size_hint_x: 1
+                                size_hint_y: None
+                                height: dp(40)
+                                font_size: '13sp'
+                                on_release: app.set_provider('claude')
+
+                            MDRaisedButton:
+                                id: btn_openai
+                                text: 'OpenAI'
+                                size_hint_x: 1
+                                size_hint_y: None
+                                height: dp(40)
+                                font_size: '13sp'
+                                on_release: app.set_provider('openai')
+
+                        MDLabel:
+                            id: provider_note
+                            text: ''
+                            font_style: "Caption"
+                            theme_text_color: "Custom"
+                            text_color: 0.18, 0.55, 0.30, 1
+                            size_hint_y: None
+                            height: dp(20)
+                            adaptive_height: True
+
+                        MDTextField:
+                            id: api_key_input
+                            hint_text: 'API Key'
+                            mode: 'rectangle'
+                            password: True
+                            size_hint_y: None
+                            height: dp(52)
+                            font_size: '13sp'
+
+                        MDRaisedButton:
+                            text: 'Save API Key'
+                            size_hint_x: 1
+                            size_hint_y: None
+                            height: dp(46)
+                            on_release: app.save_api_key()
+
+                        MDLabel:
+                            id: settings_status
+                            text: ''
+                            font_style: "Caption"
+                            theme_text_color: "Custom"
+                            text_color: 0.18, 0.60, 0.30, 1
+                            size_hint_y: None
+                            height: dp(22)
+
+                        MDLabel:
+                            text: 'My Style Profile'
+                            font_style: "Subtitle2"
+                            bold: True
+                            adaptive_height: True
+                            theme_text_color: "Custom"
+                            text_color: app.theme_cls.primary_color
+
+                        MDLabel:
+                            text: 'Tell the assistant about you and what you are looking for:'
+                            font_style: "Caption"
+                            theme_text_color: "Secondary"
+                            adaptive_height: True
+
+                        MDTextField:
+                            id: style_input
+                            hint_text: 'e.g. "28M, funny and laid back, looking for something serious..."'
+                            mode: 'rectangle'
+                            multiline: True
+                            size_hint_y: None
+                            height: dp(110)
+                            font_size: '13sp'
+
+                        MDRaisedButton:
+                            text: 'Save Style Profile'
+                            size_hint_x: 1
+                            size_hint_y: None
+                            height: dp(46)
+                            md_bg_color: 0.78, 0.15, 0.20, 1
+                            on_release: app.save_style_profile()
 """
 
 
 # ─── App Class ────────────────────────────────────────────────────────────────
 
-class DatingAssistantApp(App):
+class DatingAssistantApp(MDApp):
 
     def build(self):
+        self.theme_cls.theme_style   = "Light"
+        self.theme_cls.primary_palette = "DeepOrange"
+
         global _data_file
         _data_file = os.path.join(self.user_data_dir, "dating_data.json")
         self.data = load_data()
         self.current_image_path = None
-        self._nav_ids = {}
+        self._typing_row = None
+        self._pending_content = []
+        self._pending_display = ""
 
         root = Builder.load_string(KV)
-
-        # Cache frequently used widget refs
         ids = root.ids
-        self._chat_box = ids.chat_box
-        self._chat_scroll = ids.chat_scroll
-        self._user_input = ids.user_input
-        self._img_label = ids.img_label
-        self._send_btn = ids.send_btn
-        self._ice_context = ids.ice_context
-        self._ice_box = ids.ice_box
-        self._track_note = ids.track_note
-        self._track_box = ids.track_box
-        self._wins_label = ids.wins_label
-        self._fails_label = ids.fails_label
-        self._quote_label = ids.quote_label
-        self._therapy_label = ids.therapy_label
-        self._api_key_input = ids.api_key_input
-        self._style_input = ids.style_input
-        self._settings_status = ids.settings_status
-        self._provider_note = ids.provider_note
-        self._sm = ids.sm
 
-        self._nav_ids = {
-            'assistant': ids.nav_assistant,
-            'icebreakers': ids.nav_ice,
-            'track': ids.nav_track,
-            'motivation': ids.nav_motive,
-            'settings': ids.nav_settings,
-        }
+        # Cache widget refs
+        self._chat_box      = ids.chat_box
+        self._chat_scroll   = ids.chat_scroll
+        self._user_input    = ids.user_input
+        self._img_bar       = ids.img_bar
+        self._img_name      = ids.img_name_label
+        self._send_btn      = ids.send_btn
+        self._ice_context   = ids.ice_context
+        self._ice_box       = ids.ice_box
+        self._track_note    = ids.track_note
+        self._track_box     = ids.track_box
+        self._wins_label    = ids.wins_label
+        self._fails_label   = ids.fails_label
+        self._quote_label   = ids.quote_label
+        self._therapy_label = ids.therapy_label
+        self._api_key_input     = ids.api_key_input
+        self._style_input       = ids.style_input
+        self._settings_status   = ids.settings_status
+        self._provider_note     = ids.provider_note
+        self._nav = ids.nav
+
         self._provider_btns = {
             'gemini': ids.btn_gemini,
             'claude': ids.btn_claude,
@@ -904,11 +828,9 @@ class DatingAssistantApp(App):
         if self.data.get('style_profile'):
             self._style_input.text = self.data['style_profile']
 
-        # Restore / default provider
         saved_provider = self.data.get('provider', 'gemini')
         self.set_provider(saved_provider, save=False)
 
-        # Initial content
         self.shuffle_quote()
         self.shuffle_therapy()
         self.refresh_track_display()
@@ -916,180 +838,321 @@ class DatingAssistantApp(App):
         self._add_bubble('assistant',
             "Hi! I'm your Dating Assistant.\n\n"
             "I can help with message ideas, conversation tips, icebreakers "
-            "for apps or in person, and date suggestions.\n\n"
-            "Go to Settings to choose your AI provider (Gemini is free!) "
-            "and add your API key, then ask me anything!")
+            "for apps or in-person, and date suggestions.\n\n"
+            "Tap the cog to choose your AI provider and add an API key "
+            "(Gemini has a free tier), then ask me anything!")
 
         return root
+
+    # ── Navigation ─────────────────────────────────────────────────────────────
+
+    def go_to_settings(self):
+        try:
+            self._nav.switch_tab('settings')
+        except Exception:
+            pass
 
     # ── Provider ───────────────────────────────────────────────────────────────
 
     def set_provider(self, provider, save=True):
         self.data['provider'] = provider
         notes = {
-            'gemini': 'Free tier available — get key at aistudio.google.com',
+            'gemini': 'Free tier — get key at aistudio.google.com',
             'claude': 'Paid API — console.anthropic.com',
             'openai': 'Paid API — platform.openai.com',
         }
-        active = (1, 0.42, 0.17, 1)
-        inactive = (0.88, 0.88, 0.88, 1)
+        active_bg   = self.theme_cls.primary_color
+        inactive_bg = (0.88, 0.88, 0.88, 1)
         for p, btn in self._provider_btns.items():
-            if p == provider:
-                btn.background_color = active
-                btn.color = (1, 1, 1, 1)
-                btn.bold = True
-            else:
-                btn.background_color = inactive
-                btn.color = (0.3, 0.3, 0.3, 1)
-                btn.bold = False
+            btn.md_bg_color = active_bg if p == provider else inactive_bg
         self._provider_note.text = notes.get(provider, '')
         self._api_key_input.hint_text = PROVIDER_HINTS.get(provider, '')
         if save:
             save_data(self.data)
 
-    # ── Navigation ─────────────────────────────────────────────────────────────
+    # ── Chat bubbles ───────────────────────────────────────────────────────────
 
-    def switch_screen(self, name):
-        self._sm.current = name
-        active = (1, 0.42, 0.17, 1)
-        inactive = (0.95, 0.95, 0.95, 1)
-        for n, btn in self._nav_ids.items():
-            if n == name:
-                btn.background_color = active
-                btn.color = (1, 1, 1, 1)
-                btn.bold = True
-            else:
-                btn.background_color = inactive
-                btn.color = (0.45, 0.45, 0.45, 1)
-                btn.bold = False
+    def _add_bubble(self, role: str, text: str) -> MDBoxLayout:
+        is_user = (role == 'user')
 
-    # ── Chat ───────────────────────────────────────────────────────────────────
+        if is_user:
+            card_bg   = self.theme_cls.primary_color
+            txt_color = (1, 1, 1, 1)
+            name_col  = (1, 1, 1, 0.75)
+            radius    = [dp(12), dp(4), dp(12), dp(12)]
+            align     = 'right'
+        else:
+            card_bg   = (0.93, 0.93, 0.94, 1)
+            txt_color = (0.12, 0.12, 0.14, 1)
+            name_col  = (0.50, 0.50, 0.55, 1)
+            radius    = [dp(4), dp(12), dp(12), dp(12)]
+            align     = 'left'
 
-    def _add_bubble(self, role, text):
-        is_user = role == 'user'
-        bg = (0.90, 0.92, 1.0, 1) if is_user else (1, 0.96, 0.93, 1)
-        name_color = (0.2, 0.4, 0.85, 1) if is_user else (1, 0.42, 0.17, 1)
+        PAD_H  = dp(12) * 2   # card left+right padding
+        PAD_V  = dp(8)  * 2   # card top+bottom padding
+        NAME_H = dp(16)
+        SP     = dp(2)
 
-        outer = BoxLayout(
-            orientation='vertical',
-            size_hint_y=None,
-            padding=[dp(10), dp(8), dp(10), dp(6)],
-            spacing=dp(3),
-        )
+        bubble_w = (Window.width - dp(16)) * 0.85
+        text_w   = bubble_w - PAD_H
 
-        with outer.canvas.before:
-            c = Color(*bg)
-            rect = RoundedRectangle(pos=outer.pos, size=outer.size, radius=[dp(8)])
-
-        outer.bind(
-            pos=lambda inst, val: setattr(rect, 'pos', val),
-            size=lambda inst, val: setattr(rect, 'size', val),
-        )
-
-        role_lbl = Label(
+        name_lbl = MDLabel(
             text="You" if is_user else "Assistant",
-            color=name_color,
-            font_size=dp(11),
-            bold=True,
-            size_hint_y=None,
-            height=dp(18),
-            halign='right' if is_user else 'left',
+            size_hint_y=None, height=NAME_H,
+            font_style="Caption", bold=True,
+            halign=align,
+            theme_text_color="Custom", text_color=name_col,
         )
-        role_lbl.bind(width=lambda inst, w: setattr(inst, 'text_size', (w, None)))
+        name_lbl.text_size = (text_w, None)
 
-        msg_lbl = Label(
+        msg_lbl = MDLabel(
             text=text,
-            color=(0.12, 0.12, 0.12, 1),
-            font_size=dp(14),
-            text_size=(Window.width - dp(44), None),
-            halign='right' if is_user else 'left',
-            valign='top',
-            size_hint_y=None,
-            height=dp(40),
+            size_hint_y=None, height=dp(40),
+            font_style="Body1",
+            halign=align, valign="top",
+            theme_text_color="Custom", text_color=txt_color,
+        )
+        msg_lbl.text_size = (text_w, None)
+
+        card = MDCard(
+            orientation="vertical",
+            padding=[dp(12), dp(8)], spacing=SP,
+            radius=radius,
+            size_hint_y=None, height=dp(70),
+            size_hint_x=0.85,
+            md_bg_color=card_bg,
+            elevation=1,
+        )
+        card.add_widget(name_lbl)
+        card.add_widget(msg_lbl)
+
+        row = MDBoxLayout(
+            orientation="horizontal",
+            size_hint_y=None, height=dp(76),
+            padding=[0, dp(3)],
         )
 
-        def _on_texture(inst, tex_size):
-            inst.height = tex_size[1]
-            outer.height = (
-                role_lbl.height + tex_size[1]
-                + outer.padding[1] + outer.padding[3]
-                + outer.spacing
-            )
+        def _on_tex(inst, ts):
+            msg_lbl.height = ts[1]
+            card.height    = NAME_H + SP + ts[1] + PAD_V
+            row.height     = card.height + dp(6)
 
-        msg_lbl.bind(texture_size=_on_texture)
+        msg_lbl.bind(texture_size=_on_tex)
 
-        outer.add_widget(role_lbl)
-        outer.add_widget(msg_lbl)
-        outer.height = dp(80)
+        spacer = Widget(size_hint_x=0.15)
+        if is_user:
+            row.add_widget(spacer)
+            row.add_widget(card)
+        else:
+            row.add_widget(card)
+            row.add_widget(spacer)
 
-        self._chat_box.add_widget(outer)
-        Clock.schedule_once(lambda dt: setattr(self._chat_scroll, 'scroll_y', 0), 0.12)
+        self._chat_box.add_widget(row)
+        Clock.schedule_once(lambda dt: setattr(self._chat_scroll, 'scroll_y', 0), 0.15)
+        return row
+
+    def _add_typing_indicator(self) -> MDBoxLayout:
+        card = MDCard(
+            orientation='horizontal',
+            size_hint_y=None, height=dp(36),
+            size_hint_x=0.5,
+            radius=[dp(4), dp(12), dp(12), dp(12)],
+            md_bg_color=(0.93, 0.93, 0.94, 1),
+            padding=[dp(12), dp(8)],
+            elevation=0,
+        )
+        card.add_widget(MDLabel(
+            text="typing...",
+            font_style="Caption",
+            theme_text_color="Hint",
+            adaptive_height=True,
+        ))
+
+        row = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(42),
+                          padding=[0, dp(3)])
+        row.add_widget(card)
+        row.add_widget(Widget(size_hint_x=0.5))
+
+        self._chat_box.add_widget(row)
+        Clock.schedule_once(lambda dt: setattr(self._chat_scroll, 'scroll_y', 0), 0.1)
+        return row
+
+    def _remove_typing_indicator(self):
+        if self._typing_row:
+            try:
+                self._chat_box.remove_widget(self._typing_row)
+            except Exception:
+                pass
+            self._typing_row = None
+
+    def _add_error_bubble(self, error_text: str):
+        friendly = self._parse_error(error_text)
+
+        PAD_H = dp(12) * 2
+        PAD_V = dp(8)  * 2
+        SP    = dp(4)
+        BTN_H = dp(32)
+
+        bubble_w = (Window.width - dp(16)) * 0.85
+        text_w   = bubble_w - PAD_H
+
+        msg_lbl = MDLabel(
+            text=friendly,
+            size_hint_y=None, height=dp(36),
+            font_style="Body2",
+            theme_text_color="Custom",
+            text_color=(0.68, 0.12, 0.12, 1),
+            valign="top",
+        )
+        msg_lbl.text_size = (text_w, None)
+
+        retry_btn = MDFlatButton(
+            text="Retry",
+            size_hint_y=None, height=BTN_H,
+            theme_text_color="Custom",
+            text_color=self.theme_cls.primary_color,
+        )
+
+        inner = MDBoxLayout(orientation='vertical', size_hint_y=None,
+                            height=dp(70), spacing=SP)
+        inner.add_widget(msg_lbl)
+        inner.add_widget(retry_btn)
+
+        card = MDCard(
+            orientation='vertical',
+            size_hint_y=None, height=dp(78),
+            size_hint_x=0.85,
+            radius=[dp(4), dp(12), dp(12), dp(12)],
+            md_bg_color=(0.99, 0.92, 0.92, 1),
+            padding=[dp(12), dp(8)],
+            elevation=0,
+        )
+        card.add_widget(inner)
+
+        row = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(84),
+                          padding=[0, dp(3)])
+        row.add_widget(card)
+        row.add_widget(Widget(size_hint_x=0.15))
+
+        def _on_tex(inst, ts):
+            msg_lbl.height = ts[1]
+            inner.height   = ts[1] + SP + BTN_H
+            card.height    = ts[1] + SP + BTN_H + PAD_V
+            row.height     = card.height + dp(6)
+
+        msg_lbl.bind(texture_size=_on_tex)
+
+        # Capture retry state at error time
+        pending_content = list(self._pending_content)
+        pending_display = self._pending_display
+
+        def on_retry(_):
+            self._chat_box.remove_widget(row)
+            self._send_btn.disabled = True
+            self._send_btn.text = 'Sending...'
+            self._do_send(pending_content, pending_display)
+
+        retry_btn.bind(on_release=on_retry)
+
+        self._chat_box.add_widget(row)
+        Clock.schedule_once(lambda dt: setattr(self._chat_scroll, 'scroll_y', 0), 0.15)
+
+    @staticmethod
+    def _parse_error(error_text: str) -> str:
+        e = str(error_text).lower()
+        if '401' in e or '403' in e or 'unauthorized' in e or 'invalid' in e:
+            return "Invalid API key. Please check Settings."
+        if '429' in e or 'rate' in e or 'quota' in e:
+            return "Rate limit reached. Please wait a moment and retry."
+        if any(c in e for c in ('500', '502', '503')):
+            return "Service error. Please try again."
+        if 'timeout' in e or 'timed out' in e or 'connection' in e:
+            return "Connection failed. Check your internet and retry."
+        return f"Error: {error_text[:100]}"
+
+    # ── Send flow ──────────────────────────────────────────────────────────────
 
     def send_message(self):
-        api_key = self.data.get('api_key', '').strip()
+        api_key  = self.data.get('api_key', '').strip()
         provider = self.data.get('provider', 'gemini')
+
         if not api_key:
             pname = PROVIDER_LABELS.get(provider, provider)
-            self._popup("API Key Required",
-                        f"Please add your {pname} API key in Settings first.")
+            self._show_popup("API Key Required",
+                             f"Please add your {pname} API key in Settings first.")
             return
 
-        text = self._user_input.text.strip()
-        img_path = self.current_image_path
+        text      = self._user_input.text.strip()
+        img_path  = self.current_image_path
 
         if not text and not img_path:
             return
 
-        # Build content blocks
+        # Build content blocks (Claude format; other providers convert on the fly)
         content = []
         if img_path:
             try:
                 with open(img_path, 'rb') as f:
                     b64 = base64.b64encode(f.read()).decode('utf-8')
-                ext = os.path.splitext(img_path)[1].lower()
+                ext   = os.path.splitext(img_path)[1].lower()
                 mtype = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-                         '.png': 'image/png', '.gif': 'image/gif',
+                         '.png': 'image/png',  '.gif': 'image/gif',
                          '.webp': 'image/webp'}.get(ext, 'image/jpeg')
                 content.append({"type": "image",
                                  "source": {"type": "base64",
-                                            "media_type": mtype,
-                                            "data": b64}})
-            except Exception as e:
-                self._popup("Image Error", str(e))
+                                            "media_type": mtype, "data": b64}})
+            except Exception as exc:
+                self._show_popup("Image Error", str(exc))
 
-        display_text = text or "(image only)"
+        # Display text shown in UI
         if img_path and text:
             display_text = f"[Screenshot]\n{text}"
         elif img_path:
             display_text = "[Screenshot attached — please advise]"
+        else:
+            display_text = text
 
-        content.append({"type": "text", "text": display_text})
-
-        # Add style profile to first user turn if available
+        # Prepend style profile on first message
         history = list(self.data.get('conversation_history', []))
-        style = self.data.get('style_profile', '').strip()
+        style   = self.data.get('style_profile', '').strip()
+        msg_text = display_text
         if style and not history:
-            content[-1]['text'] = f"[About me: {style}]\n\n{content[-1]['text']}"
+            msg_text = f"[About me: {style}]\n\n{display_text}"
+        content.append({"type": "text", "text": msg_text})
 
         self._add_bubble('user', display_text)
         self._user_input.text = ''
-        self.current_image_path = None
-        self._img_label.text = 'No image attached'
+        self.clear_image()
+
+        self._pending_content = content
+        self._pending_display = display_text
 
         self._send_btn.disabled = True
-        self._send_btn.text = 'Thinking...'
+        self._send_btn.text = 'Sending...'
+        self._do_send(content, display_text)
 
+    def _do_send(self, content: list, display_text: str):
+        api_key  = self.data.get('api_key', '').strip()
+        provider = self.data.get('provider', 'gemini')
+
+        history  = list(self.data.get('conversation_history', []))
         messages = history + [{"role": "user", "content": content}]
 
+        self._typing_row = self._add_typing_indicator()
+
         def on_resp(resp_text, error):
+            self._remove_typing_indicator()
             self._send_btn.disabled = False
-            self._send_btn.text = 'Get Advice'
+            self._send_btn.text = 'Send'
+
             if error:
-                self._add_bubble('assistant', f"Error: {error}")
+                self._add_error_bubble(error)
                 return
+
             self._add_bubble('assistant', resp_text)
+
             hist = self.data.get('conversation_history', [])
-            hist.append({"role": "user", "content": display_text})
+            hist.append({"role": "user",      "content": display_text})
             hist.append({"role": "assistant", "content": resp_text})
             if len(hist) > 20:
                 hist = hist[-20:]
@@ -1102,11 +1165,18 @@ class DatingAssistantApp(App):
         self._chat_box.clear_widgets()
         self.data['conversation_history'] = []
         save_data(self.data)
+        self._typing_row = None
         self._add_bubble('assistant', "Chat cleared. What would you like help with?")
 
-    def show_file_picker(self):
-        content = BoxLayout(orientation='vertical', spacing=dp(8))
+    # ── Image ──────────────────────────────────────────────────────────────────
 
+    def clear_image(self):
+        self.current_image_path = None
+        self._img_bar.height  = dp(0)
+        self._img_bar.opacity = 0
+        self._img_name.text   = ''
+
+    def show_file_picker(self):
         start = '/storage/emulated/0'
         if not os.path.exists(start):
             start = os.path.expanduser('~')
@@ -1117,27 +1187,28 @@ class DatingAssistantApp(App):
             path=start,
             filters=['*.jpg', '*.jpeg', '*.png', '*.webp', '*.gif'],
         )
-
-        btn_row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(8))
-        sel_btn = Button(text='Select', background_normal='',
-                         background_color=(1, 0.42, 0.17, 1),
-                         color=(1, 1, 1, 1))
-        can_btn = Button(text='Cancel', background_normal='',
-                         background_color=(0.88, 0.88, 0.88, 1),
-                         color=(0.3, 0.3, 0.3, 1))
+        btn_row  = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(8))
+        sel_btn  = Button(text='Select', background_normal='',
+                          background_color=(0.98, 0.34, 0.08, 1), color=(1, 1, 1, 1))
+        can_btn  = Button(text='Cancel', background_normal='',
+                          background_color=(0.85, 0.85, 0.85, 1), color=(0.3, 0.3, 0.3, 1))
         btn_row.add_widget(can_btn)
         btn_row.add_widget(sel_btn)
+
+        content = BoxLayout(orientation='vertical', spacing=dp(6))
         content.add_widget(chooser)
         content.add_widget(btn_row)
 
-        popup = Popup(title='Select Screenshot', content=content,
-                      size_hint=(0.95, 0.82))
+        popup = Popup(title='Select Screenshot', content=content, size_hint=(0.95, 0.82))
 
         def on_select(_):
             if chooser.selection:
-                self.current_image_path = chooser.selection[0]
-                fname = os.path.basename(self.current_image_path)
-                self._img_label.text = (fname[:22] + '…') if len(fname) > 22 else fname
+                path  = chooser.selection[0]
+                fname = os.path.basename(path)
+                self.current_image_path   = path
+                self._img_name.text       = (fname[:26] + '…') if len(fname) > 26 else fname
+                self._img_bar.height  = dp(36)
+                self._img_bar.opacity = 1
             popup.dismiss()
 
         sel_btn.bind(on_press=on_select)
@@ -1146,13 +1217,14 @@ class DatingAssistantApp(App):
 
     # ── Icebreakers ────────────────────────────────────────────────────────────
 
-    def generate_opener(self, kind):
-        api_key = self.data.get('api_key', '').strip()
+    def generate_opener(self, kind: str):
+        api_key  = self.data.get('api_key', '').strip()
         provider = self.data.get('provider', 'gemini')
+
         if not api_key:
             pname = PROVIDER_LABELS.get(provider, provider)
-            self._popup("API Key Required",
-                        f"Please add your {pname} API key in Settings first.")
+            self._show_popup("API Key Required",
+                             f"Please add your {pname} API key in Settings first.")
             return
 
         ctx = self._ice_context.text.strip() or "No specific context provided."
@@ -1167,7 +1239,7 @@ class DatingAssistantApp(App):
             'inperson': (
                 f"Generate 3 natural in-person icebreakers. Context: {ctx}\n"
                 "Keep them casual, confident, and easy to deliver naturally. "
-                "Avoid anything corny. Include a brief note on delivery for each."
+                "Avoid anything corny. Include a brief delivery note for each."
             ),
             'date': (
                 f"Suggest 5 creative date ideas. Context: {ctx}\n"
@@ -1177,53 +1249,65 @@ class DatingAssistantApp(App):
         }
 
         self._ice_box.clear_widgets()
-        loading = Label(
-            text='Generating ideas...',
-            color=(0.55, 0.55, 0.55, 1),
-            font_size=dp(14),
-            size_hint_y=None,
-            height=dp(40),
-        )
+
+        # Loading card
+        loading = MDCard(orientation='horizontal', size_hint_y=None, height=dp(46),
+                         radius=[dp(10)], md_bg_color=self.theme_cls.bg_dark,
+                         padding=[dp(14), dp(12)], elevation=0)
+        loading.add_widget(MDLabel(text="Generating ideas...", font_style="Body2",
+                                   theme_text_color="Hint", adaptive_height=True))
         self._ice_box.add_widget(loading)
 
         messages = [{"role": "user", "content": prompts[kind]}]
 
         def on_resp(resp_text, error):
             self._ice_box.clear_widgets()
-            body = error or resp_text
-            lbl = Label(
+            body      = error if error else resp_text
+            is_error  = bool(error)
+            txt_color = (0.68, 0.12, 0.12, 1) if is_error else (0.12, 0.12, 0.14, 1)
+
+            lbl = MDLabel(
                 text=body,
-                color=(0.12, 0.12, 0.12, 1),
-                font_size=dp(14),
-                text_size=(Window.width - dp(40), None),
-                halign='left',
-                valign='top',
-                size_hint_y=None,
-                height=dp(60),
+                size_hint_y=None, height=dp(80),
+                font_style="Body1",
+                theme_text_color="Custom", text_color=txt_color,
+                valign="top",
             )
-            lbl.bind(texture_size=lambda inst, v: setattr(inst, 'height', v[1]))
-            self._ice_box.add_widget(lbl)
+            lbl.text_size = (Window.width - dp(52), None)
+
+            card = MDCard(orientation='vertical', size_hint_y=None, height=dp(100),
+                          radius=[dp(10)], md_bg_color=self.theme_cls.bg_dark,
+                          padding=[dp(14), dp(12)], elevation=0)
+
+            def _on_tex(inst, ts):
+                lbl.height  = ts[1]
+                card.height = ts[1] + dp(24)
+            lbl.bind(texture_size=_on_tex)
+
+            card.add_widget(lbl)
+            self._ice_box.add_widget(card)
 
         call_ai(provider, api_key, messages, SYSTEM_PROMPT, on_resp)
 
     # ── Track ──────────────────────────────────────────────────────────────────
 
-    def log_result(self, kind):
-        note = self._track_note.text.strip()
-        self._track_note.text = ''
-
+    def log_result(self, kind: str):
+        note  = self._track_note.text.strip()
         entry = {"note": note, "date": datetime.now().strftime("%Y-%m-%d %H:%M")}
-        key = 'successes' if kind == 'success' else 'failures'
+        key   = 'successes' if kind == 'success' else 'failures'
         self.data.setdefault(key, []).append(entry)
         save_data(self.data)
+        self._track_note.text = ''
         self.refresh_track_display()
+        label = "Win logged!" if kind == 'success' else "Logged as a learning."
+        Snackbar(text=label).open()
 
     def refresh_track_display(self):
-        wins = len(self.data.get('successes', []))
+        wins  = len(self.data.get('successes', []))
         fails = len(self.data.get('failures', []))
 
         if hasattr(self, '_wins_label'):
-            self._wins_label.text = f'Wins: {wins}'
+            self._wins_label.text  = f'Wins: {wins}'
             self._fails_label.text = f'Learning: {fails}'
 
         if not hasattr(self, '_track_box'):
@@ -1237,23 +1321,29 @@ class DatingAssistantApp(App):
         )
         all_entries.sort(key=lambda x: x[1].get('date', ''), reverse=True)
 
-        for tag, entry in all_entries[:25]:
-            is_win = tag == 'W'
-            color = (0.12, 0.55, 0.28, 1) if is_win else (0.75, 0.15, 0.20, 1)
-            icon = "WIN" if is_win else "LEARN"
+        for tag, entry in all_entries[:30]:
+            is_win    = tag == 'W'
+            card_bg   = (0.90, 0.98, 0.92, 1) if is_win else (0.98, 0.91, 0.91, 1)
+            txt_color = (0.10, 0.50, 0.24, 1) if is_win else (0.62, 0.12, 0.16, 1)
+            icon      = "WIN" if is_win else "MISS"
             note_text = entry.get('note') or '(no note)'
-            lbl = Label(
-                text=f"[{icon}]  {entry.get('date', '')}  —  {note_text}",
-                color=color,
-                font_size=dp(12),
-                text_size=(Window.width - dp(30), None),
-                halign='left',
-                valign='top',
-                size_hint_y=None,
-                height=dp(32),
+
+            lbl = MDLabel(
+                text=f"[{icon}]  {entry.get('date', '')} — {note_text}",
+                size_hint_y=None, height=dp(28),
+                font_style="Caption",
+                theme_text_color="Custom", text_color=txt_color,
+                valign="top",
             )
-            lbl.bind(texture_size=lambda inst, v: setattr(inst, 'height', v[1] + dp(4)))
-            self._track_box.add_widget(lbl)
+            lbl.text_size = (Window.width - dp(56), None)
+            lbl.bind(texture_size=lambda i, ts: setattr(i, 'height', ts[1] + dp(2)))
+
+            card = MDCard(orientation='vertical', size_hint_y=None, height=dp(36),
+                          radius=[dp(8)], md_bg_color=card_bg,
+                          padding=[dp(10), dp(6)], elevation=0)
+            lbl.bind(height=lambda i, h, c=card: setattr(c, 'height', h + dp(12)))
+            card.add_widget(lbl)
+            self._track_box.add_widget(card)
 
     # ── Motivation ─────────────────────────────────────────────────────────────
 
@@ -1272,25 +1362,24 @@ class DatingAssistantApp(App):
         self.data['api_key'] = key
         save_data(self.data)
         self._settings_status.text = "API key saved!" if key else "API key cleared."
-        Clock.schedule_once(
-            lambda dt: setattr(self._settings_status, 'text', ''), 2.5)
+        Clock.schedule_once(lambda dt: setattr(self._settings_status, 'text', ''), 2.5)
 
     def save_style_profile(self):
         profile = self._style_input.text.strip()
         self.data['style_profile'] = profile
         save_data(self.data)
         self._settings_status.text = "Style profile saved!"
-        Clock.schedule_once(
-            lambda dt: setattr(self._settings_status, 'text', ''), 2.5)
+        Clock.schedule_once(lambda dt: setattr(self._settings_status, 'text', ''), 2.5)
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
-    def _popup(self, title, msg):
+    def _show_popup(self, title: str, msg: str):
+        from kivy.uix.label import Label
         content = BoxLayout(orientation='vertical', padding=dp(10), spacing=dp(8))
         lbl = Label(text=msg, color=(0.15, 0.15, 0.15, 1),
                     text_size=(Window.width * 0.72, None), halign='center')
         btn = Button(text='OK', size_hint_y=None, height=dp(44),
-                     background_normal='', background_color=(1, 0.42, 0.17, 1),
+                     background_normal='', background_color=(0.98, 0.34, 0.08, 1),
                      color=(1, 1, 1, 1))
         content.add_widget(lbl)
         content.add_widget(btn)
