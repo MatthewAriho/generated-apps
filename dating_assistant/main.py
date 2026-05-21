@@ -400,7 +400,6 @@ MDBoxLayout:
                         height: dp(42)
                         pos_hint: {"center_y": 0.5}
                         font_size: '13sp'
-                        radius: [dp(6)]
 
                     MDIconButton:
                         icon: 'close-circle-outline'
