@@ -26,6 +26,7 @@ from kivy.uix.popup import Popup
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.filechooser import FileChooserListView
 from kivy.uix.button import Button
+from kivy.uix.textinput import TextInput
 
 from kivymd.app import MDApp
 from kivymd.uix.boxlayout import MDBoxLayout
@@ -311,6 +312,12 @@ MDBoxLayout:
             MDBoxLayout:
                 orientation: 'vertical'
                 md_bg_color: app.theme_cls.bg_normal
+                canvas.before:
+                    Color:
+                        rgba: 0.949, 0.949, 0.949, 1
+                    Rectangle:
+                        pos: self.pos
+                        size: self.size
 
                 MDTopAppBar:
                     title: "Dating Assistant"
@@ -322,7 +329,7 @@ MDBoxLayout:
                     do_scroll_x: False
                     canvas.before:
                         Color:
-                            rgba: app.theme_cls.bg_normal
+                            rgba: 0.949, 0.949, 0.949, 1
                         Rectangle:
                             pos: self.pos
                             size: self.size
@@ -368,12 +375,11 @@ MDBoxLayout:
                         on_release: app.clear_image()
 
                 # Input area
-                MDBoxLayout:
+                BoxLayout:
                     size_hint_y: None
-                    height: dp(50)
-                    padding: [dp(4), dp(4), dp(2), dp(4)]
-                    spacing: dp(0)
-                    md_bg_color: app.theme_cls.bg_dark
+                    height: dp(46)
+                    padding: [dp(4), dp(5), dp(4), dp(5)]
+                    spacing: dp(2)
                     canvas.before:
                         Color:
                             rgba: 0.91, 0.91, 0.91, 1
@@ -384,27 +390,31 @@ MDBoxLayout:
                     MDIconButton:
                         icon: 'image-plus'
                         size_hint: None, None
-                        size: dp(38), dp(42)
+                        size: dp(32), dp(36)
                         pos_hint: {"center_y": 0.5}
                         theme_text_color: "Custom"
                         text_color: app.theme_cls.primary_color
                         on_release: app.show_file_picker()
 
-                    MDTextField:
+                    TextInput:
                         id: user_input
                         hint_text: 'Type here...'
-                        mode: 'fill'
                         multiline: False
                         size_hint_x: 1
                         size_hint_y: None
-                        height: dp(42)
+                        height: dp(36)
                         pos_hint: {"center_y": 0.5}
                         font_size: '13sp'
+                        background_color: 1, 1, 1, 1
+                        foreground_color: 0.12, 0.12, 0.12, 1
+                        hint_text_color: 0.55, 0.55, 0.55, 1
+                        padding: [dp(8), dp(9)]
+                        cursor_color: app.theme_cls.primary_color
 
                     MDIconButton:
                         icon: 'close-circle-outline'
                         size_hint: None, None
-                        size: dp(30), dp(42)
+                        size: dp(30), dp(36)
                         pos_hint: {"center_y": 0.5}
                         theme_text_color: "Custom"
                         text_color: 0.55, 0.55, 0.55, 1
@@ -414,7 +424,7 @@ MDBoxLayout:
                         id: send_btn
                         icon: 'send-circle'
                         size_hint: None, None
-                        size: dp(42), dp(42)
+                        size: dp(36), dp(36)
                         pos_hint: {"center_y": 0.5}
                         theme_text_color: "Custom"
                         text_color: app.theme_cls.primary_color
@@ -429,6 +439,12 @@ MDBoxLayout:
             MDBoxLayout:
                 orientation: 'vertical'
                 md_bg_color: app.theme_cls.bg_normal
+                canvas.before:
+                    Color:
+                        rgba: 0.949, 0.949, 0.949, 1
+                    Rectangle:
+                        pos: self.pos
+                        size: self.size
 
                 MDTopAppBar:
                     title: "Icebreakers & Openers"
@@ -485,7 +501,7 @@ MDBoxLayout:
                     do_scroll_x: False
                     canvas.before:
                         Color:
-                            rgba: app.theme_cls.bg_normal
+                            rgba: 0.949, 0.949, 0.949, 1
                         Rectangle:
                             pos: self.pos
                             size: self.size
@@ -505,6 +521,12 @@ MDBoxLayout:
             MDBoxLayout:
                 orientation: 'vertical'
                 md_bg_color: app.theme_cls.bg_normal
+                canvas.before:
+                    Color:
+                        rgba: 0.949, 0.949, 0.949, 1
+                    Rectangle:
+                        pos: self.pos
+                        size: self.size
 
                 MDTopAppBar:
                     title: "Track Results"
@@ -579,7 +601,7 @@ MDBoxLayout:
                     do_scroll_x: False
                     canvas.before:
                         Color:
-                            rgba: app.theme_cls.bg_normal
+                            rgba: 0.949, 0.949, 0.949, 1
                         Rectangle:
                             pos: self.pos
                             size: self.size
@@ -599,6 +621,12 @@ MDBoxLayout:
             MDBoxLayout:
                 orientation: 'vertical'
                 md_bg_color: app.theme_cls.bg_normal
+                canvas.before:
+                    Color:
+                        rgba: 0.949, 0.949, 0.949, 1
+                    Rectangle:
+                        pos: self.pos
+                        size: self.size
 
                 MDTopAppBar:
                     title: "Get Out There!"
@@ -608,7 +636,7 @@ MDBoxLayout:
                     do_scroll_x: False
                     canvas.before:
                         Color:
-                            rgba: app.theme_cls.bg_normal
+                            rgba: 0.949, 0.949, 0.949, 1
                         Rectangle:
                             pos: self.pos
                             size: self.size
@@ -687,6 +715,12 @@ MDBoxLayout:
             MDBoxLayout:
                 orientation: 'vertical'
                 md_bg_color: app.theme_cls.bg_normal
+                canvas.before:
+                    Color:
+                        rgba: 0.949, 0.949, 0.949, 1
+                    Rectangle:
+                        pos: self.pos
+                        size: self.size
 
                 MDTopAppBar:
                     title: "Settings"
@@ -696,7 +730,7 @@ MDBoxLayout:
                     do_scroll_x: False
                     canvas.before:
                         Color:
-                            rgba: app.theme_cls.bg_normal
+                            rgba: 0.949, 0.949, 0.949, 1
                         Rectangle:
                             pos: self.pos
                             size: self.size
