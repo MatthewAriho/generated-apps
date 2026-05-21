@@ -287,13 +287,19 @@ KV = """
 MDBoxLayout:
     orientation: 'vertical'
     md_bg_color: app.theme_cls.bg_normal
+    canvas.before:
+        Color:
+            rgba: app.theme_cls.bg_normal
+        Rectangle:
+            pos: self.pos
+            size: self.size
 
     MDBottomNavigation:
         id: nav
         transition_duration: 0.1
         text_color_active: 1, 1, 1, 1
-        text_color_normal: 1, 1, 1, 0.55
-        panel_color: app.theme_cls.primary_color
+        text_color_normal: 1, 1, 1, 0.45
+        panel_color: 0.16, 0.10, 0.07, 1
 
         # ── Chat ─────────────────────────────────────────────────────────────
         MDBottomNavigationItem:
@@ -313,6 +319,12 @@ MDBoxLayout:
                 ScrollView:
                     id: chat_scroll
                     do_scroll_x: False
+                    canvas.before:
+                        Color:
+                            rgba: app.theme_cls.bg_normal
+                        Rectangle:
+                            pos: self.pos
+                            size: self.size
 
                     MDBoxLayout:
                         id: chat_box
@@ -356,54 +368,50 @@ MDBoxLayout:
 
                 # Input area
                 MDBoxLayout:
-                    orientation: 'vertical'
                     size_hint_y: None
-                    height: dp(88)
-                    padding: [dp(6), dp(4), dp(6), dp(6)]
-                    spacing: dp(4)
+                    height: dp(56)
+                    padding: [dp(4), dp(6), dp(4), dp(6)]
+                    spacing: dp(2)
                     md_bg_color: app.theme_cls.bg_dark
 
-                    MDBoxLayout:
+                    MDIconButton:
+                        icon: 'image-plus'
+                        size_hint: None, None
+                        size: dp(36), dp(44)
+                        pos_hint: {"center_y": 0.5}
+                        theme_text_color: "Custom"
+                        text_color: app.theme_cls.primary_color
+                        on_release: app.show_file_picker()
+
+                    MDTextField:
+                        id: user_input
+                        hint_text: 'Message or question...'
+                        mode: 'rectangle'
+                        multiline: False
+                        size_hint_x: 1
                         size_hint_y: None
-                        height: dp(48)
-                        spacing: dp(2)
+                        height: dp(44)
+                        pos_hint: {"center_y": 0.5}
+                        font_size: '13sp'
 
-                        MDIconButton:
-                            icon: 'image-plus'
-                            size_hint: None, None
-                            size: dp(40), dp(48)
-                            theme_text_color: "Custom"
-                            text_color: app.theme_cls.primary_color
-                            on_release: app.show_file_picker()
+                    MDIconButton:
+                        icon: 'close-circle-outline'
+                        size_hint: None, None
+                        size: dp(32), dp(44)
+                        pos_hint: {"center_y": 0.5}
+                        theme_text_color: "Custom"
+                        text_color: 0.55, 0.55, 0.55, 1
+                        on_release: app.clear_chat()
 
-                        MDTextField:
-                            id: user_input
-                            hint_text: 'Ask for ideas, tips, icebreakers...'
-                            mode: 'rectangle'
-                            multiline: False
-                            size_hint_x: 1
-                            size_hint_y: None
-                            height: dp(48)
-                            font_size: '13sp'
-
-                        MDIconButton:
-                            icon: 'close-circle-outline'
-                            size_hint: None, None
-                            size: dp(36), dp(48)
-                            theme_text_color: "Custom"
-                            text_color: 0.5, 0.5, 0.5, 1
-                            on_release: app.clear_chat()
-
-                        MDRaisedButton:
-                            id: send_btn
-                            text: 'Send'
-                            size_hint_x: None
-                            width: dp(72)
-                            size_hint_y: None
-                            height: dp(40)
-                            pos_hint: {"center_y": 0.5}
-                            font_size: '13sp'
-                            on_release: app.send_message()
+                    MDIconButton:
+                        id: send_btn
+                        icon: 'send-circle'
+                        size_hint: None, None
+                        size: dp(44), dp(44)
+                        pos_hint: {"center_y": 0.5}
+                        theme_text_color: "Custom"
+                        text_color: app.theme_cls.primary_color
+                        on_release: app.send_message()
 
         # ── Icebreakers ───────────────────────────────────────────────────────
         MDBottomNavigationItem:
@@ -468,6 +476,12 @@ MDBoxLayout:
 
                 ScrollView:
                     do_scroll_x: False
+                    canvas.before:
+                        Color:
+                            rgba: app.theme_cls.bg_normal
+                        Rectangle:
+                            pos: self.pos
+                            size: self.size
                     MDBoxLayout:
                         id: ice_box
                         orientation: 'vertical'
@@ -556,6 +570,12 @@ MDBoxLayout:
 
                 ScrollView:
                     do_scroll_x: False
+                    canvas.before:
+                        Color:
+                            rgba: app.theme_cls.bg_normal
+                        Rectangle:
+                            pos: self.pos
+                            size: self.size
                     MDBoxLayout:
                         id: track_box
                         orientation: 'vertical'
@@ -579,6 +599,12 @@ MDBoxLayout:
 
                 ScrollView:
                     do_scroll_x: False
+                    canvas.before:
+                        Color:
+                            rgba: app.theme_cls.bg_normal
+                        Rectangle:
+                            pos: self.pos
+                            size: self.size
                     MDBoxLayout:
                         orientation: 'vertical'
                         adaptive_height: True
@@ -661,6 +687,12 @@ MDBoxLayout:
 
                 ScrollView:
                     do_scroll_x: False
+                    canvas.before:
+                        Color:
+                            rgba: app.theme_cls.bg_normal
+                        Rectangle:
+                            pos: self.pos
+                            size: self.size
                     MDBoxLayout:
                         orientation: 'vertical'
                         adaptive_height: True
@@ -1047,7 +1079,7 @@ class DatingAssistantApp(MDApp):
         def on_retry(_):
             self._chat_box.remove_widget(row)
             self._send_btn.disabled = True
-            self._send_btn.text = 'Sending...'
+            self._send_btn.icon = 'timer-sand'
             self._do_send(pending_content, pending_display)
 
         retry_btn.bind(on_release=on_retry)
@@ -1141,7 +1173,7 @@ class DatingAssistantApp(MDApp):
         def on_resp(resp_text, error):
             self._remove_typing_indicator()
             self._send_btn.disabled = False
-            self._send_btn.text = 'Send'
+            self._send_btn.icon = 'send-circle'
 
             if error:
                 self._add_error_bubble(error)
