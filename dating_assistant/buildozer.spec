@@ -4,6 +4,7 @@ package.name = datingassistant
 package.domain = org.datingassistant
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,json
+source.exclude_dirs = build,.buildozer,bin,__pycache__
 version = 2.0
 requirements = python3,kivy==2.2.1,kivymd==1.1.1,openssl
 orientation = portrait
