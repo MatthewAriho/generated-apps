@@ -392,14 +392,15 @@ MDBoxLayout:
 
                     MDTextField:
                         id: user_input
-                        hint_text: 'Message...'
-                        mode: 'rectangle'
+                        hint_text: 'Type here...'
+                        mode: 'fill'
                         multiline: False
                         size_hint_x: 1
                         size_hint_y: None
                         height: dp(42)
                         pos_hint: {"center_y": 0.5}
                         font_size: '13sp'
+                        radius: [dp(6)]
 
                     MDIconButton:
                         icon: 'close-circle-outline'
