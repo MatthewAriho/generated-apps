@@ -298,7 +298,7 @@ MDBoxLayout:
         # ── Chat ─────────────────────────────────────────────────────────────
         MDBottomNavigationItem:
             name: 'chat'
-            text: 'Chat'
+            text: ' '
             icon: 'chat-outline'
 
             MDBoxLayout:
@@ -358,59 +358,57 @@ MDBoxLayout:
                 MDBoxLayout:
                     orientation: 'vertical'
                     size_hint_y: None
-                    height: dp(116)
-                    padding: [dp(8), dp(4), dp(8), dp(8)]
+                    height: dp(88)
+                    padding: [dp(6), dp(4), dp(6), dp(6)]
                     spacing: dp(4)
                     md_bg_color: app.theme_cls.bg_dark
 
-                    MDTextField:
-                        id: user_input
-                        hint_text: 'Ask for message ideas, tips, icebreakers...'
-                        mode: 'rectangle'
-                        multiline: True
-                        size_hint_y: None
-                        height: dp(64)
-                        font_size: '14sp'
-
                     MDBoxLayout:
                         size_hint_y: None
-                        height: dp(36)
-                        spacing: dp(4)
+                        height: dp(48)
+                        spacing: dp(2)
 
                         MDIconButton:
                             icon: 'image-plus'
                             size_hint: None, None
-                            size: dp(36), dp(36)
+                            size: dp(40), dp(48)
                             theme_text_color: "Custom"
                             text_color: app.theme_cls.primary_color
                             on_release: app.show_file_picker()
 
-                        MDFlatButton:
-                            text: 'Clear'
-                            size_hint_x: None
-                            width: dp(64)
+                        MDTextField:
+                            id: user_input
+                            hint_text: 'Ask for ideas, tips, icebreakers...'
+                            mode: 'rectangle'
+                            multiline: False
+                            size_hint_x: 1
                             size_hint_y: None
-                            height: dp(36)
+                            height: dp(48)
+                            font_size: '13sp'
+
+                        MDIconButton:
+                            icon: 'close-circle-outline'
+                            size_hint: None, None
+                            size: dp(36), dp(48)
                             theme_text_color: "Custom"
                             text_color: 0.5, 0.5, 0.5, 1
                             on_release: app.clear_chat()
-
-                        Widget:
 
                         MDRaisedButton:
                             id: send_btn
                             text: 'Send'
                             size_hint_x: None
-                            width: dp(84)
+                            width: dp(72)
                             size_hint_y: None
-                            height: dp(36)
-                            font_size: '14sp'
+                            height: dp(40)
+                            pos_hint: {"center_y": 0.5}
+                            font_size: '13sp'
                             on_release: app.send_message()
 
         # ── Icebreakers ───────────────────────────────────────────────────────
         MDBottomNavigationItem:
             name: 'icebreakers'
-            text: 'Openers'
+            text: ' '
             icon: 'lightning-bolt-outline'
 
             MDBoxLayout:
@@ -480,7 +478,7 @@ MDBoxLayout:
         # ── Track ─────────────────────────────────────────────────────────────
         MDBottomNavigationItem:
             name: 'track'
-            text: 'Track'
+            text: ' '
             icon: 'chart-line'
 
             MDBoxLayout:
@@ -568,7 +566,7 @@ MDBoxLayout:
         # ── Motivate ──────────────────────────────────────────────────────────
         MDBottomNavigationItem:
             name: 'motivate'
-            text: 'Motivate'
+            text: ' '
             icon: 'fire'
 
             MDBoxLayout:
@@ -650,7 +648,7 @@ MDBoxLayout:
         # ── Settings ──────────────────────────────────────────────────────────
         MDBottomNavigationItem:
             name: 'settings'
-            text: 'Settings'
+            text: ' '
             icon: 'cog-outline'
 
             MDBoxLayout:
