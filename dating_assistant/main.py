@@ -18,6 +18,7 @@ from datetime import datetime
 
 from kivy.clock import Clock
 from kivy.core.window import Window
+Window.clearcolor = (0.949, 0.949, 0.949, 1)
 from kivy.lang import Builder
 from kivy.metrics import dp
 from kivy.uix.widget import Widget
@@ -289,7 +290,7 @@ MDBoxLayout:
     md_bg_color: app.theme_cls.bg_normal
     canvas.before:
         Color:
-            rgba: app.theme_cls.bg_normal
+            rgba: 0.949, 0.949, 0.949, 1
         Rectangle:
             pos: self.pos
             size: self.size
@@ -369,15 +370,21 @@ MDBoxLayout:
                 # Input area
                 MDBoxLayout:
                     size_hint_y: None
-                    height: dp(56)
-                    padding: [dp(4), dp(6), dp(4), dp(6)]
-                    spacing: dp(2)
+                    height: dp(50)
+                    padding: [dp(4), dp(4), dp(2), dp(4)]
+                    spacing: dp(0)
                     md_bg_color: app.theme_cls.bg_dark
+                    canvas.before:
+                        Color:
+                            rgba: 0.91, 0.91, 0.91, 1
+                        Rectangle:
+                            pos: self.pos
+                            size: self.size
 
                     MDIconButton:
                         icon: 'image-plus'
                         size_hint: None, None
-                        size: dp(36), dp(44)
+                        size: dp(38), dp(42)
                         pos_hint: {"center_y": 0.5}
                         theme_text_color: "Custom"
                         text_color: app.theme_cls.primary_color
@@ -385,19 +392,19 @@ MDBoxLayout:
 
                     MDTextField:
                         id: user_input
-                        hint_text: 'Message or question...'
+                        hint_text: 'Message...'
                         mode: 'rectangle'
                         multiline: False
                         size_hint_x: 1
                         size_hint_y: None
-                        height: dp(44)
+                        height: dp(42)
                         pos_hint: {"center_y": 0.5}
                         font_size: '13sp'
 
                     MDIconButton:
                         icon: 'close-circle-outline'
                         size_hint: None, None
-                        size: dp(32), dp(44)
+                        size: dp(30), dp(42)
                         pos_hint: {"center_y": 0.5}
                         theme_text_color: "Custom"
                         text_color: 0.55, 0.55, 0.55, 1
@@ -407,7 +414,7 @@ MDBoxLayout:
                         id: send_btn
                         icon: 'send-circle'
                         size_hint: None, None
-                        size: dp(44), dp(44)
+                        size: dp(42), dp(42)
                         pos_hint: {"center_y": 0.5}
                         theme_text_color: "Custom"
                         text_color: app.theme_cls.primary_color
@@ -1158,7 +1165,7 @@ class DatingAssistantApp(MDApp):
         self._pending_display = display_text
 
         self._send_btn.disabled = True
-        self._send_btn.text = 'Sending...'
+        self._send_btn.icon = 'timer-sand'
         self._do_send(content, display_text)
 
     def _do_send(self, content: list, display_text: str):
