@@ -19,6 +19,7 @@ from datetime import datetime
 from kivy.clock import Clock
 from kivy.core.window import Window
 Window.clearcolor = (0.949, 0.949, 0.949, 1)
+Window.softinput_mode = "below_target"
 from kivy.lang import Builder
 from kivy.metrics import dp
 from kivy.uix.widget import Widget
@@ -400,16 +401,19 @@ MDBoxLayout:
                         id: user_input
                         hint_text: 'Type here...'
                         multiline: False
+                        write_tab: False
                         size_hint_x: 1
                         size_hint_y: None
                         height: dp(36)
                         pos_hint: {"center_y": 0.5}
                         font_size: '13sp'
+                        background_normal: ''
+                        background_active: ''
                         background_color: 1, 1, 1, 1
                         foreground_color: 0.12, 0.12, 0.12, 1
-                        hint_text_color: 0.55, 0.55, 0.55, 1
-                        padding: [dp(8), dp(9)]
-                        cursor_color: app.theme_cls.primary_color
+                        hint_text_color: 0.6, 0.6, 0.6, 1
+                        padding: [dp(8), dp(10), dp(8), dp(8)]
+                        cursor_color: 0.98, 0.34, 0.08, 1
 
                     MDIconButton:
                         icon: 'close-circle-outline'
@@ -979,7 +983,7 @@ class DatingAssistantApp(MDApp):
         msg_lbl = MDLabel(
             text=text,
             size_hint_y=None, height=dp(40),
-            font_style="Body1",
+            font_size=dp(13),
             halign=align, valign="top",
             theme_text_color="Custom", text_color=txt_color,
         )
@@ -1445,18 +1449,18 @@ class DatingAssistantApp(MDApp):
     # ── Helpers ────────────────────────────────────────────────────────────────
 
     def _show_popup(self, title: str, msg: str):
-        from kivy.uix.label import Label
-        content = BoxLayout(orientation='vertical', padding=dp(10), spacing=dp(8))
-        lbl = Label(text=msg, color=(0.15, 0.15, 0.15, 1),
-                    text_size=(Window.width * 0.72, None), halign='center')
-        btn = Button(text='OK', size_hint_y=None, height=dp(44),
-                     background_normal='', background_color=(0.98, 0.34, 0.08, 1),
-                     color=(1, 1, 1, 1))
-        content.add_widget(lbl)
-        content.add_widget(btn)
-        pop = Popup(title=title, content=content, size_hint=(0.82, 0.38))
-        btn.bind(on_press=lambda _: pop.dismiss())
-        pop.open()
+        from kivymd.uix.dialog import MDDialog
+        dlg = MDDialog(
+            title=title,
+            text=msg,
+            buttons=[MDFlatButton(
+                text="OK",
+                theme_text_color="Custom",
+                text_color=self.theme_cls.primary_color,
+                on_release=lambda *_: dlg.dismiss(),
+            )],
+        )
+        dlg.open()
 
 
 if __name__ == '__main__':
