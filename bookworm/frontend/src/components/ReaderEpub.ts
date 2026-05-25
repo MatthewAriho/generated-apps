@@ -211,6 +211,94 @@ function applyIframeStyles() {
   } catch {}
 }
 
+// ─── Lock epub.js containers (prevent native touch-scroll) ──────────────────
+
+function lockEpubContainers() {
+  let lockStyle = document.getElementById("bw-epub-lock");
+  if (!lockStyle) {
+    lockStyle = document.createElement("style");
+    lockStyle.id = "bw-epub-lock";
+    document.head.appendChild(lockStyle);
+  }
+  lockStyle.textContent = `
+    #epub-viewer > div,
+    #epub-viewer > div > div {
+      overflow: hidden !important;
+      overflow-x: hidden !important;
+      overflow-y: hidden !important;
+      touch-action: none !important;
+      scroll-snap-type: none !important;
+      -webkit-overflow-scrolling: auto !important;
+    }
+  `;
+  const mc = state.rendition?.manager?.container;
+  if (mc) {
+    mc.style.setProperty("overflow", "hidden", "important");
+    mc.style.setProperty("overflow-x", "hidden", "important");
+    mc.style.setProperty("overflow-y", "hidden", "important");
+    mc.style.setProperty("touch-action", "none", "important");
+    mc.style.setProperty("scroll-snap-type", "none", "important");
+  }
+}
+
+// ─── Iframe touch handlers (replaces overlay) ───────────────────────────────
+
+let _iframePrev: (() => void) | null = null;
+let _iframeNext: (() => void) | null = null;
+let _toggleUI: (() => void) | null = null;
+
+function attachIframeTouchHandlers() {
+  if (!state.rendition) return;
+  try {
+    state.rendition.getContents().forEach((c: any) => {
+      try {
+        const doc = c.document;
+        if (!doc || (doc as any)._bwTouchBound) return;
+        (doc as any)._bwTouchBound = true;
+
+        let sx = 0, sy = 0, st = 0;
+
+        doc.addEventListener("touchstart", (e: TouchEvent) => {
+          sx = e.touches[0].clientX;
+          sy = e.touches[0].clientY;
+          st = Date.now();
+        }, { passive: true });
+
+        doc.addEventListener("touchmove", (e: TouchEvent) => {
+          e.preventDefault();
+        }, { passive: false });
+
+        doc.addEventListener("touchend", (e: TouchEvent) => {
+          const dx = e.changedTouches[0].clientX - sx;
+          const dy = e.changedTouches[0].clientY - sy;
+          const dt = Date.now() - st;
+
+          if (dt < 400 && Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 2) {
+            dx < 0 ? _iframeNext?.() : _iframePrev?.();
+            return;
+          }
+
+          if (dt < 300 && Math.abs(dx) < 15 && Math.abs(dy) < 15) {
+            const target = e.target as HTMLElement;
+            if (target?.closest?.("a")) return;
+
+            const w = doc.documentElement?.clientWidth ?? window.innerWidth;
+            const tapX = e.changedTouches[0].clientX;
+
+            if (tapX < w * 0.3) {
+              _iframePrev?.();
+            } else if (tapX > w * 0.7) {
+              _iframeNext?.();
+            } else {
+              _toggleUI?.();
+            }
+          }
+        }, { passive: true });
+      } catch {}
+    });
+  } catch {}
+}
+
 function syncSettingsUI() {
   const { theme, fontSize, margins } = state.prefs;
   const fl = document.getElementById("font-size-label");
@@ -233,41 +321,24 @@ function applyPrefs() {
 
 // ─── Progress ────────────────────────────────────────────────────────────────
 
-/**
- * Compute progress. Prefers the event's own percentage (epub.js computes internally
- * via its own CFI comparison path which is more reliable than calling percentageFromCfi
- * externally). Falls back to spine-based estimate before locations generate.
- */
-function calcProgress(cfi: string, locationEvent: any): { pct: number; page: number | null } {
-  // 1. Best source: event.start.percentage — set by epub.js after locations.generate()
-  const pct_event = locationEvent?.start?.percentage;
-  if (typeof pct_event === "number" && state.locationsReady) {
-    const pct = Math.min(100, Math.round(pct_event * 100));
-    const page = state.totalPages > 0
-      ? Math.max(1, Math.min(state.totalPages, Math.round(pct_event * state.totalPages) + 1))
-      : null;
-    return { pct, page };
-  }
-  // 2. Second best: call percentageFromCfi ourselves (works when we don't have an event)
-  if (state.locationsReady && cfi) {
-    try {
-      const pct_raw: number = state.book.locations.percentageFromCfi(cfi);
-      if (typeof pct_raw === "number" && pct_raw >= 0) {
-        const pct = Math.min(100, Math.round(pct_raw * 100));
-        const page = state.totalPages > 0
-          ? Math.max(1, Math.min(state.totalPages, Math.round(pct_raw * state.totalPages) + 1))
-          : null;
-        return { pct, page };
-      }
-    } catch {}
-  }
-  // 3. Spine-based estimate (before generate() completes)
+function calcProgress(_cfi: string, locationEvent: any): { pct: number; page: number | null } {
+  // 1. Primary: spine index + displayed.page/total (always works, no CFI lookup)
   const numSections = Math.max(1, (state.book?.spine?.spineItems ?? []).length);
   const sIdx = locationEvent?.start?.index ?? 0;
   const dp = locationEvent?.start?.displayed?.page ?? 1;
   const dt = Math.max(1, locationEvent?.start?.displayed?.total ?? 1);
-  const progress = (sIdx + dp / dt) / numSections;
-  return { pct: Math.min(100, Math.round(progress * 100)), page: null };
+  const spineProgress = (sIdx + dp / dt) / numSections;
+
+  // 2. Enhancement: use event.start.percentage when locations are ready and non-zero
+  const pct_event = locationEvent?.start?.percentage;
+  const useLocations = state.locationsReady && typeof pct_event === "number" && pct_event > 0;
+  const progress = useLocations ? pct_event : spineProgress;
+
+  const pct = Math.min(100, Math.round(progress * 100));
+  const page = state.totalPages > 0
+    ? Math.max(1, Math.min(state.totalPages, Math.round(progress * state.totalPages) + 1))
+    : null;
+  return { pct, page };
 }
 
 function updateProgressDisplay(pct: number, page: number | null) {
@@ -276,7 +347,7 @@ function updateProgressDisplay(pct: number, page: number | null) {
 
   const pgEl = document.getElementById("epub-page-input") as HTMLInputElement;
   if (pgEl && document.activeElement !== pgEl)
-    pgEl.value = page != null ? String(page) : (state.locationsReady ? String(Math.max(1, Math.round(pct / 100 * state.totalPages))) : "…");
+    pgEl.value = page != null ? String(page) : String(Math.max(1, Math.round(pct / 100 * Math.max(1, state.totalPages))));
 
   const totalEl = document.getElementById("epub-page-total");
   if (totalEl) totalEl.textContent = state.totalPages > 0 ? `/ ${state.totalPages}` : "";
@@ -560,77 +631,19 @@ export async function initEpubReader(bookData: Book, onStatus?: (msg: string) =>
   const iframePrev = () => { state.rendition?.prev(); resetUiTimer(); };
   const iframeNext = () => { state.rendition?.next(); resetUiTimer(); };
 
-  // ── Touch overlay ──
-  // The ONLY reliable way to prevent epub.js's internal scroll: place a transparent
-  // div on top of everything that intercepts ALL touch events. We handle swipe/tap
-  // ourselves and call rendition.prev()/next() programmatically.
-  const overlay = document.createElement("div");
-  overlay.id = "epub-touch-overlay";
-  overlay.style.cssText = "position:absolute;inset:0;z-index:10;touch-action:none;";
-  container.appendChild(overlay);
+  _iframePrev = iframePrev;
+  _iframeNext = iframeNext;
+  _toggleUI = () => { if (state.uiVisible) hideUI(); else showUI(); };
 
-  let touchStartX = 0, touchStartY = 0, touchStartTime = 0;
+  // ── Lock containers + attach iframe touch handlers ──
+  lockEpubContainers();
+  attachIframeTouchHandlers();
 
-  overlay.addEventListener("touchstart", (e: TouchEvent) => {
-    touchStartX = e.touches[0].clientX;
-    touchStartY = e.touches[0].clientY;
-    touchStartTime = Date.now();
-  }, { passive: true });
-
-  overlay.addEventListener("touchmove", (e: TouchEvent) => {
-    // Block all native scroll/gesture from this overlay
-    e.preventDefault();
-  }, { passive: false });
-
-  overlay.addEventListener("touchend", (e: TouchEvent) => {
-    const dx = e.changedTouches[0].clientX - touchStartX;
-    const dy = e.changedTouches[0].clientY - touchStartY;
-    const dt = Date.now() - touchStartTime;
-
-    // Swipe
-    if (dt < 400 && Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 2) {
-      dx < 0 ? iframeNext() : iframePrev();
-      return;
-    }
-
-    // Tap
-    if (dt < 300 && Math.abs(dx) < 15 && Math.abs(dy) < 15) {
-      const w = overlay.clientWidth;
-      const tapX = e.changedTouches[0].clientX;
-
-      if (tapX < w * 0.3) {
-        iframePrev();
-      } else if (tapX > w * 0.7) {
-        iframeNext();
-      } else {
-        // Center tap — toggle UI
-        if (state.uiVisible) hideUI(); else showUI();
-      }
-      return;
-    }
-  }, { passive: true });
-
-  // For text selection: long-press should pass through to iframe.
-  // Temporarily hide overlay during long-press so user can select text.
-  let longPressTimer: ReturnType<typeof setTimeout> | null = null;
-  overlay.addEventListener("touchstart", () => {
-    longPressTimer = setTimeout(() => {
-      overlay.style.pointerEvents = "none";
-    }, 500);
-  });
-  overlay.addEventListener("touchend", () => {
-    if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
-    // Re-enable overlay after a short delay (selection might still be active)
-    setTimeout(() => { overlay.style.pointerEvents = "auto"; }, 100);
-  });
-  overlay.addEventListener("touchmove", () => {
-    // If finger moves, cancel long-press
-    if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
-  });
-
-  // ── Re-apply styles on every page render ──
+  // ── Re-apply on every page render ──
   state.rendition.on("rendered", () => {
+    lockEpubContainers();
     applyIframeStyles();
+    attachIframeTouchHandlers();
     applyAnnotations();
   });
 
@@ -693,7 +706,7 @@ export async function initEpubReader(bookData: Book, onStatus?: (msg: string) =>
     }
   });
   pctInput?.addEventListener("blur", () => {
-    const { pct } = calcProgress(state.currentCfi, null);
+    const { pct } = calcProgress(state.currentCfi, state.lastLocationEvent);
     pctInput.value = `${pct}%`;
   });
 
@@ -718,7 +731,7 @@ export async function initEpubReader(bookData: Book, onStatus?: (msg: string) =>
     if (section) state.rendition?.display(section.href);
   });
   pageInput?.addEventListener("blur", () => {
-    const { page } = calcProgress(state.currentCfi, null);
+    const { page } = calcProgress(state.currentCfi, state.lastLocationEvent);
     pageInput.value = page != null ? String(page) : "…";
   });
 
@@ -801,7 +814,7 @@ export async function initEpubReader(bookData: Book, onStatus?: (msg: string) =>
 async function saveProgress(bookId: number): Promise<void> {
   if (!state.currentCfi) return;
   const now = new Date();
-  const { pct } = calcProgress(state.currentCfi, null);
+  const { pct } = calcProgress(state.currentCfi, state.lastLocationEvent);
   try {
     await progressApi.update(bookId, state.currentCfi, pct, 0, 0,
       state.sessionStart.toISOString(), now.toISOString());
