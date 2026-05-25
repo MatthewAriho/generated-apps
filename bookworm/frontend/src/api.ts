@@ -109,6 +109,9 @@ export const books = {
     form.append("file", file);
     return request("POST", "/books/upload", form);
   },
+  update(id: number, data: { title?: string; author?: string; genres?: string[] }): Promise<Book> {
+    return request("PATCH", `/books/${id}`, data);
+  },
   updateShelf(id: number, status: "backlog" | "reading" | "read", rating?: number): Promise<Book> {
     return request("POST", `/books/${id}/shelf`, { status, rating });
   },
@@ -196,6 +199,13 @@ export interface AnalyticsOverview {
   books_this_month: number;
 }
 
+export interface StreakData {
+  current_streak: number;
+  longest_streak: number;
+  today_active: boolean;
+  heatmap: { date: string; active: boolean }[];
+}
+
 export const analytics = {
   overview(): Promise<AnalyticsOverview> {
     return request("GET", "/analytics/overview");
@@ -208,5 +218,8 @@ export const analytics = {
   },
   sessions(): Promise<unknown[]> {
     return request("GET", "/analytics/sessions");
+  },
+  streak(): Promise<StreakData> {
+    return request("GET", "/analytics/streak");
   },
 };

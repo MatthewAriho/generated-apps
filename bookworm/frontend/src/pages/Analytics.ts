@@ -1,4 +1,4 @@
-import { analytics as analyticsApi, type AnalyticsOverview, ApiError } from "../api";
+import { analytics as analyticsApi, type AnalyticsOverview, type StreakData, ApiError } from "../api";
 
 export function renderAnalytics(): string {
   return `
@@ -21,14 +21,15 @@ document.addEventListener("page:mounted", async (e: Event) => {
   const body = document.getElementById("analytics-body")!;
 
   try {
-    const [overview, speedData, genreData, sessionsData] = await Promise.all([
+    const [overview, speedData, genreData, sessionsData, streakData] = await Promise.all([
       analyticsApi.overview(),
       analyticsApi.speed(),
       analyticsApi.genres(),
       analyticsApi.sessions(),
+      analyticsApi.streak(),
     ]);
 
-    body.innerHTML = buildAnalyticsHtml(overview, speedData, genreData, sessionsData as any[]);
+    body.innerHTML = buildAnalyticsHtml(overview, speedData, genreData, sessionsData as any[], streakData);
   } catch (err) {
     body.innerHTML = `<div class="form-error">${err instanceof ApiError ? err.message : "Could not load analytics"}</div>`;
   }
@@ -38,9 +39,13 @@ function buildAnalyticsHtml(
   overview: AnalyticsOverview,
   speed: { week: string; wpm: number; hours: number }[],
   genres: { genre: string; count: number; percentage: number }[],
-  sessions: any[]
+  sessions: any[],
+  streak: StreakData
 ): string {
   return `
+    <!-- Reading streak -->
+    ${buildStreakCard(streak)}
+
     <!-- Stats cards -->
     <div class="stats-grid">
       ${statCard("Total Books", overview.total_books, "in your library")}
@@ -147,6 +152,26 @@ function buildSessionsTable(sessions: any[]): string {
       </thead>
       <tbody>${rows}</tbody>
     </table>`;
+}
+
+function buildStreakCard(streak: StreakData): string {
+  const days = streak.heatmap
+    .map((d) => {
+      const isToday = d.date === new Date().toISOString().slice(0, 10);
+      const classes = ["streak-day"];
+      if (d.active) classes.push("active");
+      if (isToday) classes.push("today");
+      return `<div class="${classes.join(" ")}" title="${d.date}"></div>`;
+    })
+    .join("");
+
+  return `
+    <div class="streak-card">
+      <div class="streak-value">${streak.current_streak}</div>
+      <div class="streak-label">day streak${streak.longest_streak > streak.current_streak ? ` (best: ${streak.longest_streak})` : ""}</div>
+      <div class="streak-heatmap">${days}</div>
+    </div>
+  `;
 }
 
 function escapeHtml(str: string): string {

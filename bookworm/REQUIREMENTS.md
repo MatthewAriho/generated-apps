@@ -83,31 +83,64 @@ Built with TypeScript, JavaScript, CSS (frontend) and Python (backend).
 - [x] Prowlarr search integration
 - [x] Daily backup scheduler
 
-### Phase 2 — Library & Reader Polish *(next)*
+### Phase 2 — Library *(next)*
 - [x] Backlog / reading / read shelves
 - [x] Progress tracking (backend + save every 30s)
-- [ ] Progress display bugs (see BUGS.md)
-- [ ] Touch interaction bugs (see BUGS.md)
-- [ ] Internal epub link navigation (see BUGS.md)
 - [ ] Library search and filter
 - [ ] Read history / activity feed
 - [ ] Progress indicators on book cards in library grid
 - [ ] Book metadata editing
 - [ ] Sort library (by title, author, last read, date added)
 
-### Phase 3 — Analytics
-- [ ] Fix remaining reader bugs (see BUGS.md for detailed notes)
+### Phase 3 — Analytics & Reader Features
 - [ ] Reading speed calculation (WPM)
 - [ ] Genre/microgenre tagging
 - [ ] Reading stats dashboard
 - [ ] Time-per-session tracking
+- [ ] Reading streaks and habits
+- [ ] Features from popular ebook apps (research Kindle, Apple Books, Kobo, Libby, Moon+ Reader, etc.):
+  - Dictionary/Wikipedia lookup on word select
+  - Adjustable line spacing and font family
+  - Page turn animations (slide, curl)
+  - Reading timer / session clock
+  - Estimated time remaining in chapter/book
+  - Immersive mode (auto-dim, night shift)
+  - Vocabulary builder (save looked-up words)
+  - Synced reading position across devices
+  - Collections / custom tags
+  - Import/export annotations
+  - Text-to-speech
+  - Flashcard generation from highlights
 
 ### Phase 4 — Discovery
-- [ ] User profile builder
+- [ ] User profile builder (from reading history, genres, pace, preferences)
 - [ ] Recommendation engine
 - [ ] Internet book search / download integration
+- [ ] Browse by genre/microgenre
 
-### Phase 5 — Social (Future)
-- [ ] Book clubs
-- [ ] Shared shelves
-- [ ] Discussion threads
+### Phase 4b — Reader Bug Fixes (see BUGS.md for full details)
+- [ ] Center tap causes backward page navigation (epub.js column-snap scroll)
+- [ ] Page counter / progress never updates (CFI binary search unreliable)
+- [ ] Internal epub links not working (overlay blocks iframe clicks)
+
+### Phase 5 — Social
+- [ ] **Friends & Profiles**
+  - Add/follow other users
+  - View others' bookshelves (books read, backlog) — opt-in visibility
+  - See others' reading progress on a book
+- [ ] **Shared Reading**
+  - Group reading: users form a group around a specific book
+  - Track each member's progress in the group
+  - Send books to other users (trivial given file-based storage)
+- [ ] **Highlights & Comments**
+  - Opt-in public highlights/annotations
+  - See other readers' comments on the same passage
+  - Like/reply to highlights
+- [ ] **Book Clubs**
+  - Create/join clubs with scheduled reading targets
+  - Reminders for upcoming meetings or reading deadlines
+  - Discussion threads per book or per chapter
+- [ ] **Notifications**
+  - Push notifications for group activity
+  - Reminders when a book club meeting is due
+  - "X finished this book" / "X started reading Y" feed updates

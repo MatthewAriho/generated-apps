@@ -24,6 +24,12 @@ class ShelfRequest(BaseModel):
     rating: Optional[int] = None
 
 
+class BookUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    author: Optional[str] = None
+    genres: Optional[List[str]] = None
+
+
 class BookResponse(BaseModel):
     id: int
     title: str
@@ -188,6 +194,32 @@ def delete_book(
     db.query(models.ReadingSession).filter_by(book_id=book_id).delete()
     db.delete(book)
     db.commit()
+
+
+@router.patch("/books/{book_id}", response_model=BookResponse)
+def update_book(
+    book_id: int,
+    req: BookUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    book = db.query(models.Book).filter_by(id=book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    if req.title is not None:
+        book.title = req.title
+    if req.author is not None:
+        book.author = req.author
+    if req.genres is not None:
+        book.genres = json.dumps(req.genres)
+
+    db.commit()
+    db.refresh(book)
+
+    ub = db.query(models.UserBook).filter_by(user_id=current_user.id, book_id=book.id).first()
+    prog = db.query(models.ReadingProgress).filter_by(user_id=current_user.id, book_id=book.id).first()
+    return book_to_response(book, ub, prog)
 
 
 @router.post("/books/{book_id}/shelf", response_model=BookResponse)

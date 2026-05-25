@@ -1,4 +1,4 @@
-const CACHE_NAME = "bookworm-v21";
+const CACHE_NAME = "bookworm-v22";
 const STATIC_ASSETS = ["/", "/index.html"];
 
 self.addEventListener("install", (event) => {
