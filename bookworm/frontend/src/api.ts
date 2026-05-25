@@ -206,6 +206,21 @@ export interface StreakData {
   heatmap: { date: string; active: boolean }[];
 }
 
+export interface ReadingProfile {
+  top_genres: { genre: string; count: number }[];
+  books_finished: number;
+  avg_days_per_book: number;
+  total_hours_read: number;
+  recommendations: {
+    book_id: number;
+    title: string;
+    author: string | null;
+    cover_url: string | null;
+    reason: string;
+  }[];
+  search_suggestions: string[];
+}
+
 export const analytics = {
   overview(): Promise<AnalyticsOverview> {
     return request("GET", "/analytics/overview");
@@ -221,5 +236,8 @@ export const analytics = {
   },
   streak(): Promise<StreakData> {
     return request("GET", "/analytics/streak");
+  },
+  profile(): Promise<ReadingProfile> {
+    return request("GET", "/analytics/profile");
   },
 };

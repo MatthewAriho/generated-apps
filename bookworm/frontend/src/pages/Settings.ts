@@ -2,13 +2,30 @@ import { auth, ApiError } from "../api";
 import { showToast } from "./toast";
 import { analytics as analyticsApi } from "../api";
 import { getAuthHeaders } from "../auth";
+import { APP_THEMES, getAppTheme, setAppTheme, type AppTheme } from "../theme";
 
 export function renderSettings(): string {
+  const currentTheme = getAppTheme();
+  const themeButtons = APP_THEMES.map((t) => `
+    <button class="theme-swatch${t.id === currentTheme ? " active" : ""}" data-app-theme="${t.id}" title="${t.label}">
+      <span class="theme-swatch-color" style="background:${t.preview}"></span>
+      <span class="theme-swatch-label">${t.label}</span>
+    </button>
+  `).join("");
+
   return `
     <div class="page-header">
       <div>
         <h1 class="page-title">Settings</h1>
         <p class="page-subtitle">Account and preferences</p>
+      </div>
+    </div>
+
+    <!-- Theme -->
+    <div class="settings-section">
+      <h3>App Theme</h3>
+      <div class="theme-grid" id="theme-grid">
+        ${themeButtons}
       </div>
     </div>
 
@@ -63,6 +80,17 @@ document.addEventListener("page:mounted", async (e: Event) => {
 });
 
 async function bootSettings(): Promise<void> {
+  // Theme picker
+  document.querySelectorAll("[data-app-theme]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const theme = (btn as HTMLElement).dataset.appTheme as AppTheme;
+      setAppTheme(theme);
+      document.querySelectorAll("[data-app-theme]").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      showToast(`Theme: ${APP_THEMES.find((t) => t.id === theme)?.label}`, "success");
+    });
+  });
+
   // Load integrations status
   try {
     const resp = await fetch("/api/settings/integrations", { headers: getAuthHeaders() });

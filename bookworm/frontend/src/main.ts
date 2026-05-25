@@ -8,6 +8,10 @@ import { renderReader } from "./pages/Reader";
 import { renderSearch } from "./pages/Search";
 import { renderAnalytics } from "./pages/Analytics";
 import { renderSettings } from "./pages/Settings";
+import { applyAppTheme } from "./theme";
+
+// Apply saved theme immediately (before render to avoid flash)
+applyAppTheme();
 
 const app = document.getElementById("app")!;
 

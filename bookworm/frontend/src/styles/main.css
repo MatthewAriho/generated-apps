@@ -1,5 +1,6 @@
-/* ===== CSS Variables ===== */
-:root {
+/* ===== CSS Variables (default: midnight theme) ===== */
+:root,
+[data-theme="midnight"] {
   --bg: #1a1a2e;
   --surface: #16213e;
   --card: #0f3460;
@@ -13,6 +14,78 @@
   --shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
   --transition: 0.2s ease;
   --font: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+[data-theme="ocean"] {
+  --bg: #0d1b2a;
+  --surface: #1b2838;
+  --card: #1f3a52;
+  --accent: #4fc3f7;
+  --accent-hover: #29b6f6;
+  --text: #e0f0ff;
+  --muted: #7ba8c9;
+  --border: rgba(79, 195, 247, 0.15);
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+[data-theme="forest"] {
+  --bg: #1a2e1a;
+  --surface: #1e3a1e;
+  --card: #2d4a2d;
+  --accent: #66bb6a;
+  --accent-hover: #4caf50;
+  --text: #e8f5e9;
+  --muted: #81c784;
+  --border: rgba(102, 187, 106, 0.15);
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+[data-theme="ember"] {
+  --bg: #1f1410;
+  --surface: #2c1c14;
+  --card: #3d2a1e;
+  --accent: #ff7043;
+  --accent-hover: #f4511e;
+  --text: #fbe9e7;
+  --muted: #bcaaa4;
+  --border: rgba(255, 112, 67, 0.15);
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+[data-theme="lavender"] {
+  --bg: #1a1525;
+  --surface: #252038;
+  --card: #342d4a;
+  --accent: #b388ff;
+  --accent-hover: #9c64ff;
+  --text: #ede7f6;
+  --muted: #9e8cbf;
+  --border: rgba(179, 136, 255, 0.15);
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+[data-theme="light"] {
+  --bg: #f5f5f5;
+  --surface: #ffffff;
+  --card: #ffffff;
+  --accent: #e94560;
+  --accent-hover: #c73652;
+  --text: #1a1a2e;
+  --muted: #666677;
+  --border: rgba(0, 0, 0, 0.1);
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="cream"] {
+  --bg: #faf6f0;
+  --surface: #fff8f0;
+  --card: #fff3e6;
+  --accent: #d4764e;
+  --accent-hover: #c0623a;
+  --text: #3d2b1f;
+  --muted: #8b7355;
+  --border: rgba(139, 115, 85, 0.15);
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
 }
 
 /* ===== Reset ===== */
@@ -679,6 +752,49 @@ button {
   gap: 1rem;
 }
 
+/* ===== Theme picker ===== */
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 0.75rem;
+}
+
+.theme-swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.75rem 0.5rem;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.theme-swatch:hover {
+  border-color: var(--muted);
+  transform: translateY(-2px);
+}
+
+.theme-swatch.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(233, 69, 96, 0.2);
+}
+
+.theme-swatch-color {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.1);
+}
+
+.theme-swatch-label {
+  font-size: 0.75rem;
+  color: var(--text);
+  font-weight: 500;
+}
+
 /* ===== Analytics charts ===== */
 .chart-section {
   background: var(--card);
@@ -993,6 +1109,126 @@ button {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+}
+
+/* ===== Discover / Recommendations ===== */
+.discover-section {
+  margin-top: 2rem;
+}
+
+.discover-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 1rem;
+}
+
+.genre-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.genre-chip {
+  padding: 0.4rem 1rem;
+  border-radius: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.genre-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(233, 69, 96, 0.08);
+}
+
+.rec-grid {
+  display: flex;
+  gap: 1rem;
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+  -webkit-overflow-scrolling: touch;
+}
+
+.rec-card {
+  flex-shrink: 0;
+  width: 140px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform var(--transition), box-shadow var(--transition);
+}
+
+.rec-card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow);
+}
+
+.rec-cover {
+  width: 100%;
+  aspect-ratio: 2/3;
+  object-fit: cover;
+}
+
+.rec-cover-placeholder {
+  width: 100%;
+  aspect-ratio: 2/3;
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2rem;
+}
+
+.rec-info {
+  padding: 0.6rem;
+}
+
+.rec-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.rec-author {
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin-top: 0.2rem;
+}
+
+.rec-reason {
+  font-size: 0.65rem;
+  color: var(--accent);
+  margin-top: 0.3rem;
+  font-style: italic;
+}
+
+.profile-stats {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.profile-stat {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.profile-stat-value {
+  font-weight: 700;
+  color: var(--text);
+  font-size: 1.1rem;
 }
 
 /* ===== Reading streak card (analytics) ===== */

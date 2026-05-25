@@ -112,7 +112,8 @@ Built with TypeScript, JavaScript, CSS (frontend) and Python (backend).
   - Text-to-speech
   - Flashcard generation from highlights
 
-### Phase 4 — Discovery
+### Phase 4 — Discovery & Personalization
+- [ ] App-wide theme changer (dark, light, midnight, ocean, etc.)
 - [ ] User profile builder (from reading history, genres, pace, preferences)
 - [ ] Recommendation engine
 - [ ] Internet book search / download integration

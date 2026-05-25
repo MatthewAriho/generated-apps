@@ -1,5 +1,7 @@
+import json
 from datetime import datetime, timedelta
 from typing import List
+from collections import defaultdict
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -103,4 +105,81 @@ def streak(
         "longest_streak": longest,
         "today_active": today in active_dates,
         "heatmap": heatmap,
+    }
+
+
+@router.get("/analytics/profile")
+def reading_profile(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Build a user reading profile: top genres, reading pace, and recommendations."""
+    user_books = db.query(models.UserBook).filter_by(user_id=current_user.id).all()
+    sessions = db.query(models.ReadingSession).filter_by(user_id=current_user.id).all()
+
+    # Top genres
+    genre_counts: dict = defaultdict(int)
+    for ub in user_books:
+        book = db.query(models.Book).filter_by(id=ub.book_id).first()
+        if book and book.genres:
+            try:
+                for g in json.loads(book.genres):
+                    if g:
+                        genre_counts[g] += 1
+            except Exception:
+                pass
+
+    top_genres = sorted(genre_counts.items(), key=lambda x: -x[1])[:5]
+
+    # Reading pace
+    total_seconds = sum(
+        (s.ended_at - s.started_at).total_seconds()
+        for s in sessions if s.started_at and s.ended_at
+    )
+    total_books_finished = sum(1 for ub in user_books if ub.status == models.ShelfStatus.read)
+    avg_days_per_book = 0
+    if total_books_finished > 0:
+        finished_books = [ub for ub in user_books if ub.status == models.ShelfStatus.read and ub.started_at and ub.finished_at]
+        if finished_books:
+            total_reading_days = sum((ub.finished_at - ub.started_at).days for ub in finished_books)
+            avg_days_per_book = round(total_reading_days / len(finished_books), 1)
+
+    # Recommendations: unread books from user's library matching top genres
+    read_book_ids = {ub.book_id for ub in user_books if ub.status == models.ShelfStatus.read}
+    reading_book_ids = {ub.book_id for ub in user_books if ub.status == models.ShelfStatus.reading}
+    backlog_ids = {ub.book_id for ub in user_books if ub.status == models.ShelfStatus.backlog}
+
+    recommendations = []
+    if top_genres and backlog_ids:
+        top_genre_names = {g for g, _ in top_genres[:3]}
+        for book_id in backlog_ids:
+            book = db.query(models.Book).filter_by(id=book_id).first()
+            if not book or not book.genres:
+                continue
+            try:
+                book_genres = set(json.loads(book.genres))
+            except Exception:
+                continue
+            overlap = book_genres & top_genre_names
+            if overlap:
+                recommendations.append({
+                    "book_id": book.id,
+                    "title": book.title,
+                    "author": book.author,
+                    "cover_url": book.cover_url,
+                    "reason": f"Matches your interest in {', '.join(overlap)}",
+                })
+            if len(recommendations) >= 5:
+                break
+
+    # Search suggestions based on top genres
+    search_suggestions = [g for g, _ in top_genres[:5]]
+
+    return {
+        "top_genres": [{"genre": g, "count": c} for g, c in top_genres],
+        "books_finished": total_books_finished,
+        "avg_days_per_book": avg_days_per_book,
+        "total_hours_read": round(total_seconds / 3600, 1),
+        "recommendations": recommendations,
+        "search_suggestions": search_suggestions,
     }

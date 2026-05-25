@@ -8,7 +8,7 @@ export function renderNav(): string {
 
   const links = [
     { path: "library",   label: "Library"   },
-    { path: "search",    label: "Search"    },
+    { path: "search",    label: "Discover"  },
     { path: "analytics", label: "Analytics" },
     { path: "settings",  label: "Settings"  },
   ];
