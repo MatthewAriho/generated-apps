@@ -42,6 +42,119 @@ Transparent overlay div (`#epub-touch-overlay`) placed on top of everything with
 
 ---
 
+## Unified Root Cause Analysis (All Bugs)
+
+All four bugs share a single root cause: **epub.js 0.3.93 paginated mode uses a natively-scrollable container with CSS `column-width` to create "pages"**. The browser treats columns as scroll positions — any touch on the container can trigger a native scroll to the previous/next column. This is the design of the library, not a bug in it.
+
+The overlay hack (Bug #1 fix) blocks native scroll by intercepting all touch events at z-index 10. But since epub.js renders content in an **iframe inside that same container**, the overlay also:
+- Blocks clicks on links inside the epub (Bug #3)
+- Interferes with epub.js's internal layout/reflow/iframe-swap cycle (Bug #4 — blank pages)
+- Doesn't help with progress, which is a separate issue with CFI binary search (Bug #2)
+
+Every fix creates a new problem because the fundamental model — a scrollable div whose scroll position IS the navigation state — is hostile to custom touch handling.
+
+### epub.js Internal Architecture (reference)
+
+**Default Paginated Manager** (`src/managers/default/index.js`):
+- Container: `position: relative; display: flex; flex-direction: row; overflow-y: hidden`
+- Content goes into iframes with CSS `column-width` set to viewport width
+- `next()`/`prev()` call `scrollBy(layout.delta, 0, true)` on the container
+- Scroll listener with 20ms debounce emits `MANAGERS.SCROLLED` → `RENDITION.RELOCATED`
+- `updateLayout()`, `updateFlow()`, and resize all reapply inline styles (overriding any CSS hacks)
+
+**Continuous Manager** (`src/managers/continuous/index.js`):
+- Extends default manager, adds infinite-loading pattern
+- `fill()` / `check()` prepend/append sections as user scrolls near boundaries
+- `trim()` removes views outside viewport to save memory
+- Optional `Snap` helper for paginated horizontal flow only
+
+**Locations** (`src/locations.js`):
+- `generate(chars)` walks every spine section, creates CFI at every N characters (default 150)
+- `locationFromCfi()` does binary search comparing CFI strings — unreliable because current page CFI format often doesn't match stored locations format
+- `percentageFromCfi()` wraps `locationFromCfi()` — same unreliability
+
+**Key events flow**: `next()`/`prev()` → `scrollBy()` → scroll event → 20ms debounce → `MANAGERS.SCROLLED` → `reportLocation()` → `paginatedLocation()` calculates visible pages → emits `RENDITION.RELOCATED` with CFIs and page numbers
+
+---
+
+## Proposed Rework: Three Architectures
+
+### A. Scrolled Mode (recommended first step — fixes all bugs)
+
+Switch from `flow: "paginated"` to `flow: "scrolled"` with `manager: "continuous"`. This tells epub.js to use vertical scrolling instead of column-based pagination.
+
+```typescript
+rendition = book.renderTo(container, {
+  width: "100%",
+  height: "100%",
+  flow: "scrolled",
+  manager: "continuous",
+});
+```
+
+- Content renders as a vertically-scrolling document
+- No columns, no `scrollLeft`, no snap behavior
+- Native touch scroll just works — up/down
+- Links inside the iframe work — no overlay needed
+- Progress = `scrollTop / scrollHeight` — trivially reliable
+- epub.js's `locationChanged` event fires correctly in scrolled mode
+- `displayed.page/total` per chapter works reliably
+
+**Bug resolution**:
+| Bug | Fix |
+|-----|-----|
+| #1 Center tap → backward | No columns. Vertical scroll only. Center tap toggles UI. |
+| #2 Progress stuck at 0% | `scrollTop/scrollHeight` for chapter progress + spine index for global. `displayed.page/total` also works. |
+| #3 Links don't work | No overlay. Iframe receives clicks normally. |
+| #4 Pages go blank | No overlay. Continuous manager handles view loading/unloading cleanly. |
+
+**Trade-off**: Navigation becomes vertical scroll instead of left/right page flip. Many modern readers (Kindle, Apple Books, Libby) offer this as default. Better for variable-width content (tables, images, code blocks).
+
+**Effort**: ~20 lines changed. Remove overlay, remove swipe/tap zone code, add scroll-based progress.
+
+### B. Custom Paginated Renderer (most control, for later)
+
+Keep epub.js for parsing only. Build our own renderer:
+
+1. epub.js loads book, gives us spine sections and chapter HTML
+2. Extract HTML content from epub.js's loaded section
+3. Inject into a `<div>` (not iframe) with CSS `column-width` = viewport width
+4. The div has `overflow: hidden` — **not scrollable by the user**
+5. Calculate total columns (= pages) from `scrollWidth / columnWidth`
+6. Navigation: `transform: translateX(-pageIndex * pageWidth)` — no scroll involved
+7. Touch handling: swipe/tap handler updates pageIndex and sets the transform
+
+**Bug resolution**: All bugs gone. No scrollable container, no iframe isolation issues, no overlay needed. Progress = `pageIndex / totalColumns` per chapter — always correct.
+
+**Trade-offs**:
+- Significant implementation effort (CSS injection, image handling, font loading from epub, XHTML quirks)
+- Need to handle chapter transitions ourselves
+- epub.js annotation API won't work — need own DOM-based highlights
+- Some EPUB content relies on iframe sandboxing for CSS isolation; div needs scoped styles
+
+**Unlocks**: Page-turn animations (slide, curl), two-page spread on tablets, full DOM access for dictionary lookup on word tap.
+
+### C. Patched Paginated Mode (not recommended)
+
+Keep epub.js paginated but disable scroll navigation:
+- Set `overflow: hidden !important` on `rendition.manager.container`
+- Set `scroll-snap-type: none !important`
+- Reapply on every `rendered` event
+- Problem: epub.js's own `scrollBy()` in `next()`/`prev()` also won't work with `overflow: hidden`
+- Would need to temporarily toggle overflow, or use `scrollLeft` assignment directly
+- epub.js reapplies styles in `updateLayout()`, `updateFlow()`, and after resize — race condition documented in failed attempts #3 and #8 above
+
+**Not recommended**: worst of both worlds. Still depends on epub.js rendering but also fighting it. Every epub.js update could break patches.
+
+### Recommended Path
+
+1. **Now**: Implement A (scrolled mode). 20-line change, fixes all four bugs immediately.
+2. **Add toggle**: Reader settings — "Scroll" (default) vs "Pages". Users who want page-turn UX get it later.
+3. **Later**: Build B (custom paginated) behind the "Pages" toggle. Uses epub.js for parsing, handles rendering ourselves.
+4. **Skip C entirely.**
+
+---
+
 ## 2. Page Counter / Progress Never Updates (CRITICAL)
 
 ### Symptoms
