@@ -8,6 +8,7 @@ import { renderReader } from "./pages/Reader";
 import { renderSearch } from "./pages/Search";
 import { renderAnalytics } from "./pages/Analytics";
 import { renderSettings } from "./pages/Settings";
+import { renderSocial } from "./pages/Social";
 import { applyAppTheme } from "./theme";
 
 // Apply saved theme immediately (before render to avoid flash)
@@ -44,6 +45,9 @@ onRoute((route) => {
       break;
     case "search":
       main.innerHTML = renderSearch();
+      break;
+    case "social":
+      main.innerHTML = renderSocial();
       break;
     case "analytics":
       main.innerHTML = renderAnalytics();

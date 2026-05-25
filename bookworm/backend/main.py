@@ -9,7 +9,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from database import init_db
-from routers import users, books, reader, progress, search, analytics
+from routers import users, books, reader, progress, search, analytics, social
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -61,6 +61,7 @@ app.include_router(reader.router, prefix="/api")
 app.include_router(progress.router, prefix="/api")
 app.include_router(search.router, prefix="/api")
 app.include_router(analytics.router, prefix="/api")
+app.include_router(social.router, prefix="/api")
 
 # Serve cover images as static files
 covers_path = f"{DATA_PATH}/covers"

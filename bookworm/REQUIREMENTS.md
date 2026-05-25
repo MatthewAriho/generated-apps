@@ -119,29 +119,37 @@ Built with TypeScript, JavaScript, CSS (frontend) and Python (backend).
 - [ ] Internet book search / download integration
 - [ ] Browse by genre/microgenre
 
-### Phase 4b — Reader Bug Fixes (see BUGS.md for full details)
-- [ ] Center tap causes backward page navigation (epub.js column-snap scroll)
-- [ ] Page counter / progress never updates (CFI binary search unreliable)
-- [ ] Internal epub links not working (overlay blocks iframe clicks)
-
 ### Phase 5 — Social
-- [ ] **Friends & Profiles**
-  - Add/follow other users
-  - View others' bookshelves (books read, backlog) — opt-in visibility
+- [x] **Friends & Profiles**
+  - Add/follow other users (friend requests, accept/decline)
+  - View others' bookshelves (books read, backlog) — friends-only visibility
   - See others' reading progress on a book
-- [ ] **Shared Reading**
+  - User search by username
+  - Activity feed (friends' finished books, shared highlights)
+- [x] **Shared Reading**
   - Group reading: users form a group around a specific book
   - Track each member's progress in the group
   - Send books to other users (trivial given file-based storage)
-- [ ] **Highlights & Comments**
-  - Opt-in public highlights/annotations
+- [x] **Highlights & Comments**
+  - Opt-in public highlights/annotations (shared highlights)
   - See other readers' comments on the same passage
-  - Like/reply to highlights
-- [ ] **Book Clubs**
+  - Comment/reply on highlights
+- [x] **Book Clubs**
   - Create/join clubs with scheduled reading targets
-  - Reminders for upcoming meetings or reading deadlines
-  - Discussion threads per book or per chapter
-- [ ] **Notifications**
-  - Push notifications for group activity
-  - Reminders when a book club meeting is due
+  - Discussion threads per club
+  - Reply to discussions
+  - Discover clubs (browse all clubs)
+  - Club management (leave, delete)
+- [x] **Notifications**
+  - In-app notification system (friend requests, club discussions, highlight comments, book finished)
+  - Unread count badge on Social nav tab
+  - Mark as read (individual & bulk)
   - "X finished this book" / "X started reading Y" feed updates
+  - [ ] Push notifications (future — requires VAPID/service worker integration)
+  - [ ] Reminders when a book club meeting is due (future)
+
+### Phase 6 — Reader Bug Fixes (see BUGS.md for full details)
+- [ ] Center tap causes backward page navigation (epub.js column-snap scroll)
+- [ ] Page counter / progress never updates (CFI binary search unreliable)
+- [ ] Internal epub links not working (overlay blocks iframe clicks)
+- [ ] Epub reader stops rendering pages after a few navigations (touch overlay may block epub.js's internal iframe swap/layout cycle; pages go blank)

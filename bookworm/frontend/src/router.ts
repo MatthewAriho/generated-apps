@@ -5,6 +5,7 @@ export type Route =
   | { name: "library" }
   | { name: "reader"; id: string }
   | { name: "search" }
+  | { name: "social" }
   | { name: "analytics" }
   | { name: "settings" };
 
@@ -22,6 +23,7 @@ export function parseHash(hash: string): Route {
   if (h === "library") return { name: "library" };
   if (h.startsWith("reader/")) return { name: "reader", id: h.slice(7) };
   if (h === "search") return { name: "search" };
+  if (h === "social") return { name: "social" };
   if (h === "analytics") return { name: "analytics" };
   if (h === "settings") return { name: "settings" };
   return { name: "login" };

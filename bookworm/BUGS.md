@@ -89,3 +89,27 @@ The touch overlay (`#epub-touch-overlay`) sits on top of the iframe at z-index 1
 ### What To Try Next
 - After the overlay detects a tap in the center zone, temporarily hide the overlay and forward a synthetic click to the iframe at the same coordinates using `document.elementFromPoint()`.
 - Or: don't use an overlay — instead use epub.js's `manager.container` directly and override its scroll-snap behavior (see Bug #1 "What To Try Next").
+
+---
+
+## 4. Epub Reader Goes Blank After Several Page Turns (CRITICAL)
+
+### Symptoms
+- After navigating forward several pages (via swipe or tap), the reader stops displaying content
+- The page goes blank / empty — no text renders
+- Occurs intermittently, usually after 3-10 page turns
+
+### Root Cause (suspected)
+The touch overlay (`#epub-touch-overlay`, z-index 10) sits on top of the epub.js container. epub.js's paginated manager uses `scrollLeft` on internal wrapper divs and may also create/swap iframes during navigation. The overlay may:
+1. Block epub.js's internal layout/reflow calculations that depend on visibility or pointer events
+2. Prevent epub.js from detecting the container dimensions correctly after page turns
+3. Interfere with epub.js's `rendered` event cycle — the new section's iframe may not fully load because the overlay absorbs focus
+
+### Relationship to Other Bugs
+This is likely caused by the same overlay approach used to fix Bug #1 (center tap scroll). All four reader bugs are interconnected — the overlay was introduced to prevent native scroll on epub.js wrapper divs, but it creates cascading issues with iframe interaction, link clicks, and now rendering.
+
+### What To Try Next
+- **Remove the overlay entirely** and instead try `scroll-snap-type: none !important` on epub.js's manager container (the direct child div of `#epub-viewer`), applied in the `rendered` callback. This would prevent the column-snap behavior that causes the backward scroll without blocking iframe access.
+- **Use epub.js in `flow: "scrolled"` mode** — eliminates the paginated column layout entirely. The trade-off is losing page-turn UX in favor of vertical scroll.
+- **Fork epub.js** and patch `src/managers/default/index.js` to disable touch-based scroll navigation, keeping only programmatic `prev()`/`next()`.
+- **Investigate `rendition.manager.container`** — this is the actual scrollable div. Setting `overflow: hidden` on it (not the wrapper) after each `rendered` event, then using `scrollTo()` only from `prev()`/`next()`, may be the minimal surgical fix.

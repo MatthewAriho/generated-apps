@@ -9,6 +9,7 @@ export function renderNav(): string {
   const links = [
     { path: "library",   label: "Library"   },
     { path: "search",    label: "Discover"  },
+    { path: "social",    label: "Social"    },
     { path: "analytics", label: "Analytics" },
     { path: "settings",  label: "Settings"  },
   ];

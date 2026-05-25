@@ -221,6 +221,154 @@ export interface ReadingProfile {
   search_suggestions: string[];
 }
 
+// ---- Social ----
+
+export interface SocialUser {
+  id: number;
+  username: string;
+}
+
+export interface FriendshipData {
+  id: number;
+  user: SocialUser;
+  status: string;
+  created_at: string;
+}
+
+export interface ReadingGroupData {
+  id: number;
+  name: string;
+  book_id: number;
+  book_title: string;
+  creator: string;
+  member_count: number;
+  members: SocialUser[];
+  created_at: string;
+}
+
+export interface SharedHighlightData {
+  id: number;
+  user: SocialUser;
+  book_id: number;
+  cfi_range: string;
+  text: string;
+  note: string | null;
+  color: string;
+  created_at: string;
+  comment_count: number;
+}
+
+export interface CommentData {
+  id: number;
+  user: SocialUser;
+  text: string;
+  created_at: string;
+}
+
+export interface ClubData {
+  id: number;
+  name: string;
+  description: string | null;
+  book_id: number | null;
+  book_title: string | null;
+  target_date: string | null;
+  creator: string;
+  member_count: number;
+  members: SocialUser[];
+  created_at: string;
+}
+
+export interface DiscussionData {
+  id: number;
+  user: SocialUser;
+  title: string;
+  body: string | null;
+  reply_count: number;
+  created_at: string;
+}
+
+export interface ReplyData {
+  id: number;
+  user: SocialUser;
+  body: string;
+  created_at: string;
+}
+
+export interface NotificationData {
+  id: number;
+  type: string;
+  message: string;
+  link: string | null;
+  is_read: boolean;
+  created_at: string;
+}
+
+export interface FeedItem {
+  type: string;
+  user: SocialUser;
+  book_title?: string;
+  book_id?: number;
+  cover_url?: string | null;
+  text?: string;
+  timestamp: string;
+}
+
+export const social = {
+  // Friends
+  friends(): Promise<FriendshipData[]> { return request("GET", "/social/friends"); },
+  friendRequests(): Promise<FriendshipData[]> { return request("GET", "/social/friends/requests"); },
+  sendFriendRequest(username: string): Promise<FriendshipData> { return request("POST", "/social/friends/request", { username }); },
+  acceptFriend(id: number): Promise<void> { return request("POST", `/social/friends/${id}/accept`); },
+  removeFriend(id: number): Promise<void> { return request("DELETE", `/social/friends/${id}`); },
+  viewFriendShelf(userId: number): Promise<any[]> { return request("GET", `/social/friends/${userId}/shelf`); },
+
+  // Groups
+  groups(): Promise<ReadingGroupData[]> { return request("GET", "/social/groups"); },
+  createGroup(name: string, bookId: number): Promise<ReadingGroupData> { return request("POST", "/social/groups", { name, book_id: bookId }); },
+  joinGroup(id: number): Promise<void> { return request("POST", `/social/groups/${id}/join`); },
+  leaveGroup(id: number): Promise<void> { return request("POST", `/social/groups/${id}/leave`); },
+  groupProgress(id: number): Promise<{ user: SocialUser; percentage: number }[]> { return request("GET", `/social/groups/${id}/progress`); },
+
+  // Highlights
+  shareHighlight(data: { book_id: number; cfi_range: string; text: string; note?: string; color?: string }): Promise<SharedHighlightData> {
+    return request("POST", "/social/highlights", data);
+  },
+  bookHighlights(bookId: number): Promise<SharedHighlightData[]> { return request("GET", `/social/highlights/book/${bookId}`); },
+  deleteHighlight(id: number): Promise<void> { return request("DELETE", `/social/highlights/${id}`); },
+  highlightComments(id: number): Promise<CommentData[]> { return request("GET", `/social/highlights/${id}/comments`); },
+  addComment(highlightId: number, text: string): Promise<CommentData> { return request("POST", `/social/highlights/${highlightId}/comments`, { text }); },
+
+  // Clubs
+  clubs(): Promise<ClubData[]> { return request("GET", "/social/clubs"); },
+  discoverClubs(): Promise<ClubData[]> { return request("GET", "/social/clubs/discover"); },
+  createClub(data: { name: string; description?: string; book_id?: number; target_date?: string }): Promise<ClubData> {
+    return request("POST", "/social/clubs", data);
+  },
+  joinClub(id: number): Promise<void> { return request("POST", `/social/clubs/${id}/join`); },
+  leaveClub(id: number): Promise<void> { return request("POST", `/social/clubs/${id}/leave`); },
+  deleteClub(id: number): Promise<void> { return request("DELETE", `/social/clubs/${id}`); },
+
+  // Discussions
+  clubDiscussions(clubId: number): Promise<DiscussionData[]> { return request("GET", `/social/clubs/${clubId}/discussions`); },
+  createDiscussion(clubId: number, title: string, body?: string): Promise<DiscussionData> {
+    return request("POST", `/social/clubs/${clubId}/discussions`, { title, body });
+  },
+  discussionReplies(id: number): Promise<ReplyData[]> { return request("GET", `/social/discussions/${id}/replies`); },
+  addReply(discussionId: number, body: string): Promise<ReplyData> {
+    return request("POST", `/social/discussions/${discussionId}/replies`, { body });
+  },
+
+  // Notifications
+  notifications(): Promise<NotificationData[]> { return request("GET", "/social/notifications"); },
+  unreadCount(): Promise<{ count: number }> { return request("GET", "/social/notifications/unread-count"); },
+  markAllRead(): Promise<void> { return request("POST", "/social/notifications/read-all"); },
+  markRead(id: number): Promise<void> { return request("POST", `/social/notifications/${id}/read`); },
+
+  // Feed & search
+  feed(): Promise<FeedItem[]> { return request("GET", "/social/feed"); },
+  searchUsers(q: string): Promise<SocialUser[]> { return request("GET", `/social/users/search?q=${encodeURIComponent(q)}`); },
+};
+
 export const analytics = {
   overview(): Promise<AnalyticsOverview> {
     return request("GET", "/analytics/overview");
