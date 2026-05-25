@@ -1,0 +1,56 @@
+version: "3.9"
+
+services:
+  bookworm-api:
+    build: ./backend
+    container_name: bookworm-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DATA_PATH=/data
+      - BACKUP_PATH=/backups
+    volumes:
+      - ${DATA_PATH:-./data}:/data
+      - ${BACKUP_PATH:-./backups}:/backups
+      - ${DOWNLOADS_PATH:-./downloads}:/downloads
+    expose:
+      - "8000"
+    networks:
+      - bookworm
+
+  bookworm-web:
+    build: ./nginx
+    container_name: bookworm-web
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3080}:80"
+    depends_on:
+      - bookworm-api
+    networks:
+      - bookworm
+
+  readarr:
+    image: linuxserver/readarr:0.4.19-nightly
+    platform: linux/amd64
+    container_name: readarr
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - UMASK=002
+      - TZ=${TZ:-Europe/London}
+    volumes:
+      - ${DATA_PATH:-./data}/readarr/config:/config
+      - ${DATA_PATH:-./data}/books:/books
+      - ${DOWNLOADS_PATH:-/data/torrents/completed}:/downloads
+    ports:
+      - "${READARR_PORT:-8788}:8787"
+    networks:
+      - bookworm
+
+  # qBittorrent runs externally on this host at port 8090
+  # Credentials: admin / ySBb6aYW8YeHjxq
+
+networks:
+  bookworm:
+    driver: bridge
