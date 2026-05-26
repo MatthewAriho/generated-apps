@@ -379,6 +379,19 @@ body.reading-mode .page-content { padding: 0 !important; max-width: none !import
 .theme-btn.active,
 .theme-btn:hover { border-color: var(--accent); color: var(--accent); background: rgba(99,102,241,0.1); }
 
+.mode-btn {
+  padding: 0.35rem 0.75rem;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.mode-btn.active,
+.mode-btn:hover { border-color: var(--accent); color: var(--accent); background: rgba(99,102,241,0.1); }
+
 .settings-stepper {
   display: flex;
   align-items: center;
@@ -603,3 +616,44 @@ body.reading-mode .page-content { padding: 0 !important; max-width: none !import
   text-underline-offset: 2px;
 }
 .ann-list-jump:hover, .ann-list-edit:hover { color: var(--accent); }
+
+/* ===== Custom Paginated Mode (Option B) ===== */
+.pages-wrapper {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.pages-inner {
+  height: 100%;
+  column-fill: auto;
+  box-sizing: border-box;
+  overflow: hidden;
+  transition: transform 0.25s ease;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.pages-inner img {
+  max-width: 100%;
+  height: auto;
+}
+
+.pages-inner a {
+  color: #6366f1 !important;
+  text-decoration: underline;
+}
+
+/* ===== Scrolled Mode adjustments ===== */
+.epub-container iframe {
+  border: none;
+}
+
+/* In scrolled mode, the epub.js continuous manager creates scrollable content.
+   Make sure the container allows it. */
+.epub-container.scrolled-mode {
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+}

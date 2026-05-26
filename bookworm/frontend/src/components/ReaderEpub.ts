@@ -4,17 +4,20 @@ import { progress as progressApi } from "../api";
 
 interface ReaderMargins { top: number; bottom: number; left: number; right: number; }
 
+type ReadingMode = "scroll" | "pages";
+
 interface ReaderPrefs {
   theme: "light" | "sepia" | "dark";
   fontSize: number;
   margins: ReaderMargins;
+  readingMode: ReadingMode;
 }
 
 interface Annotation {
   cfi: string;
   color: string;
-  text: string;   // selected text
-  note: string;   // user's comment
+  text: string;
+  note: string;
 }
 
 interface EpubReaderState {
@@ -34,12 +37,22 @@ interface EpubReaderState {
   totalPages: number;
   locationsReady: boolean;
   uiVisible: boolean;
+  // Custom paginated mode state
+  pageMode: {
+    active: boolean;
+    container: HTMLElement | null;
+    currentPage: number;
+    totalPageCount: number;
+    chapterIndex: number;
+    chapterHtml: string;
+    columnWidth: number;
+  };
 }
 
 const DEFAULT_MARGINS: ReaderMargins = { top: 8, bottom: 8, left: 24, right: 24 };
 const UI_HIDE_DELAY = 3000;
 
-const THEMES = {
+const THEMES: Record<string, { bg: string; fg: string; containerBg: string }> = {
   light: { bg: "#ffffff", fg: "#2c2c2c", containerBg: "#e8e4df" },
   sepia: { bg: "#f4ecd8", fg: "#4a3728", containerBg: "#ddd0b8" },
   dark:  { bg: "#1c1c1e", fg: "#d4d4d4", containerBg: "#111111" },
@@ -59,9 +72,10 @@ const ANN_BORDER: Record<string, string> = {
 const state: EpubReaderState = {
   book: null, rendition: null, currentCfi: "", lastLocationEvent: null,
   sessionStart: new Date(), saveTimer: null, uiTimer: null,
-  prefs: { theme: "light", fontSize: 100, margins: { ...DEFAULT_MARGINS } },
+  prefs: { theme: "light", fontSize: 100, margins: { ...DEFAULT_MARGINS }, readingMode: "scroll" },
   annotations: [], pendingCfi: null, pendingColor: null, pendingText: "",
   bookId: 0, totalPages: 0, locationsReady: false, uiVisible: true,
+  pageMode: { active: false, container: null, currentPage: 0, totalPageCount: 0, chapterIndex: 0, chapterHtml: "", columnWidth: 0 },
 };
 
 // ─── HTML ────────────────────────────────────────────────────────────────────
@@ -96,6 +110,13 @@ export function renderEpubReader(_bookData: Book): string {
     <!-- Settings Sheet -->
     <div class="reader-settings-sheet" id="settings-sheet">
       <div class="settings-handle"></div>
+      <div class="settings-row">
+        <span class="settings-label">Reading mode</span>
+        <div class="theme-btns">
+          <button class="mode-btn" data-mode="scroll">Scroll</button>
+          <button class="mode-btn" data-mode="pages">Pages</button>
+        </div>
+      </div>
       <div class="settings-row">
         <span class="settings-label">Theme</span>
         <div class="theme-btns">
@@ -157,9 +178,15 @@ export function renderEpubReader(_bookData: Book): string {
 function loadPrefs(): ReaderPrefs {
   try {
     const p = JSON.parse(localStorage.getItem("bookworm_reader_prefs") ?? "");
-    return { theme: p.theme ?? "light", fontSize: p.fontSize ?? 100,
-      margins: { ...DEFAULT_MARGINS, ...(p.margins ?? {}) } };
-  } catch { return { theme: "light", fontSize: 100, margins: { ...DEFAULT_MARGINS } }; }
+    return {
+      theme: p.theme ?? "light",
+      fontSize: p.fontSize ?? 100,
+      margins: { ...DEFAULT_MARGINS, ...(p.margins ?? {}) },
+      readingMode: p.readingMode ?? "scroll",
+    };
+  } catch {
+    return { theme: "light", fontSize: 100, margins: { ...DEFAULT_MARGINS }, readingMode: "scroll" };
+  }
 }
 function savePrefs() {
   localStorage.setItem("bookworm_reader_prefs", JSON.stringify(state.prefs));
@@ -175,7 +202,6 @@ function applyIframeStyles() {
     html, body {
       background: ${t.bg} !important;
       margin: 0 !important;
-      overflow: hidden !important;
     }
     body {
       color: ${t.fg} !important;
@@ -211,100 +237,30 @@ function applyIframeStyles() {
   } catch {}
 }
 
-// ─── Lock epub.js containers (prevent native touch-scroll) ──────────────────
+// ─── Custom paginated styles (Option B) ─────────────────────────────────────
 
-function lockEpubContainers() {
-  let lockStyle = document.getElementById("bw-epub-lock");
-  if (!lockStyle) {
-    lockStyle = document.createElement("style");
-    lockStyle.id = "bw-epub-lock";
-    document.head.appendChild(lockStyle);
-  }
-  lockStyle.textContent = `
-    #epub-viewer > div,
-    #epub-viewer > div > div {
-      overflow: hidden !important;
-      overflow-x: hidden !important;
-      overflow-y: hidden !important;
-      touch-action: none !important;
-      scroll-snap-type: none !important;
-      -webkit-overflow-scrolling: auto !important;
-    }
-  `;
-  const mc = state.rendition?.manager?.container;
-  if (mc) {
-    mc.style.setProperty("overflow", "hidden", "important");
-    mc.style.setProperty("overflow-x", "hidden", "important");
-    mc.style.setProperty("overflow-y", "hidden", "important");
-    mc.style.setProperty("touch-action", "none", "important");
-    mc.style.setProperty("scroll-snap-type", "none", "important");
-  }
-}
-
-// ─── Iframe touch handlers (replaces overlay) ───────────────────────────────
-
-let _iframePrev: (() => void) | null = null;
-let _iframeNext: (() => void) | null = null;
-let _toggleUI: (() => void) | null = null;
-
-function attachIframeTouchHandlers() {
-  if (!state.rendition) return;
-  try {
-    state.rendition.getContents().forEach((c: any) => {
-      try {
-        const doc = c.document;
-        if (!doc || (doc as any)._bwTouchBound) return;
-        (doc as any)._bwTouchBound = true;
-
-        let sx = 0, sy = 0, st = 0;
-
-        doc.addEventListener("touchstart", (e: TouchEvent) => {
-          sx = e.touches[0].clientX;
-          sy = e.touches[0].clientY;
-          st = Date.now();
-        }, { passive: true });
-
-        doc.addEventListener("touchmove", (e: TouchEvent) => {
-          e.preventDefault();
-        }, { passive: false });
-
-        doc.addEventListener("touchend", (e: TouchEvent) => {
-          const dx = e.changedTouches[0].clientX - sx;
-          const dy = e.changedTouches[0].clientY - sy;
-          const dt = Date.now() - st;
-
-          if (dt < 400 && Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 2) {
-            dx < 0 ? _iframeNext?.() : _iframePrev?.();
-            return;
-          }
-
-          if (dt < 300 && Math.abs(dx) < 15 && Math.abs(dy) < 15) {
-            const target = e.target as HTMLElement;
-            if (target?.closest?.("a")) return;
-
-            const w = doc.documentElement?.clientWidth ?? window.innerWidth;
-            const tapX = e.changedTouches[0].clientX;
-
-            if (tapX < w * 0.3) {
-              _iframePrev?.();
-            } else if (tapX > w * 0.7) {
-              _iframeNext?.();
-            } else {
-              _toggleUI?.();
-            }
-          }
-        }, { passive: true });
-      } catch {}
-    });
-  } catch {}
+function applyCustomPageStyles(el: HTMLElement) {
+  const { theme, fontSize, margins } = state.prefs;
+  const t = THEMES[theme];
+  el.style.background = t.bg;
+  el.style.color = t.fg;
+  el.style.fontSize = `${fontSize}%`;
+  el.style.lineHeight = "1.7";
+  el.style.paddingTop = `${margins.top}px`;
+  el.style.paddingBottom = `${margins.bottom}px`;
+  el.style.paddingLeft = `${margins.left}px`;
+  el.style.paddingRight = `${margins.right}px`;
 }
 
 function syncSettingsUI() {
-  const { theme, fontSize, margins } = state.prefs;
+  const { theme, fontSize, margins, readingMode } = state.prefs;
   const fl = document.getElementById("font-size-label");
   if (fl) fl.textContent = `${fontSize}%`;
   document.querySelectorAll(".theme-btn").forEach(b =>
     (b as HTMLElement).classList.toggle("active", (b as HTMLElement).dataset.theme === theme)
+  );
+  document.querySelectorAll(".mode-btn").forEach(b =>
+    (b as HTMLElement).classList.toggle("active", (b as HTMLElement).dataset.mode === readingMode)
   );
   (["top","bottom","left","right"] as (keyof ReaderMargins)[]).forEach(s => {
     const el = document.getElementById(`margin-${s}`) as HTMLInputElement;
@@ -313,8 +269,15 @@ function syncSettingsUI() {
 }
 
 function applyPrefs() {
-  if (!state.rendition) return;
-  applyIframeStyles();
+  if (!state.rendition && !state.pageMode.active) return;
+  if (state.rendition) applyIframeStyles();
+  if (state.pageMode.active && state.pageMode.container) {
+    const inner = state.pageMode.container.querySelector(".pages-inner") as HTMLElement;
+    if (inner) {
+      applyCustomPageStyles(inner);
+      recalcCustomPages();
+    }
+  }
   syncSettingsUI();
   savePrefs();
 }
@@ -322,14 +285,27 @@ function applyPrefs() {
 // ─── Progress ────────────────────────────────────────────────────────────────
 
 function calcProgress(_cfi: string, locationEvent: any): { pct: number; page: number | null } {
-  // 1. Primary: spine index + displayed.page/total (always works, no CFI lookup)
+  // Custom paginated mode — use our own page tracking
+  if (state.pageMode.active) {
+    const pm = state.pageMode;
+    const numSections = Math.max(1, (state.book?.spine?.spineItems ?? []).length);
+    const chapterFraction = pm.totalPageCount > 0 ? pm.currentPage / pm.totalPageCount : 0;
+    const globalProgress = (pm.chapterIndex + chapterFraction) / numSections;
+    const pct = Math.min(100, Math.round(globalProgress * 100));
+    const page = state.totalPages > 0
+      ? Math.max(1, Math.min(state.totalPages, Math.round(globalProgress * state.totalPages) + 1))
+      : null;
+    return { pct, page };
+  }
+
+  // Scrolled mode — spine + displayed page/total
   const numSections = Math.max(1, (state.book?.spine?.spineItems ?? []).length);
   const sIdx = locationEvent?.start?.index ?? 0;
   const dp = locationEvent?.start?.displayed?.page ?? 1;
   const dt = Math.max(1, locationEvent?.start?.displayed?.total ?? 1);
   const spineProgress = (sIdx + dp / dt) / numSections;
 
-  // 2. Enhancement: use event.start.percentage when locations are ready and non-zero
+  // Use event percentage when locations are ready and non-zero
   const pct_event = locationEvent?.start?.percentage;
   const useLocations = state.locationsReady && typeof pct_event === "number" && pct_event > 0;
   const progress = useLocations ? pct_event : spineProgress;
@@ -368,6 +344,7 @@ function saveAnnotations() {
   localStorage.setItem(`bookworm_ann_${state.bookId}`, JSON.stringify(state.annotations));
 }
 function applyAnnotations() {
+  if (!state.rendition) return;
   state.annotations.forEach(ann => {
     try {
       state.rendition.annotations.highlight(
@@ -387,7 +364,6 @@ function showUI() {
 }
 
 function hideUI() {
-  // Don't hide if any panel is open
   if (document.getElementById("toc-panel")?.classList.contains("open")) return;
   if (document.getElementById("ann-list-panel")?.classList.contains("open")) return;
   if (document.getElementById("settings-sheet")?.classList.contains("open")) return;
@@ -446,14 +422,12 @@ function openCommentSheet() {
 function commitAnnotation(note: string) {
   if (!state.pendingCfi || !state.pendingColor) return;
   const { pendingCfi: cfi, pendingColor: color, pendingText: text } = state;
-  // Remove any existing annotation at this CFI first
   state.annotations = state.annotations.filter(a => a.cfi !== cfi);
-  try { state.rendition.annotations.remove(cfi, "highlight"); } catch {}
-  // Add new
+  try { state.rendition?.annotations.remove(cfi, "highlight"); } catch {}
   state.annotations.push({ cfi, color, text, note });
   saveAnnotations();
   try {
-    state.rendition.annotations.highlight(cfi, {}, undefined, "bw-highlight", { fill: ANN_COLORS[color] });
+    state.rendition?.annotations.highlight(cfi, {}, undefined, "bw-highlight", { fill: ANN_COLORS[color] });
   } catch {}
   hideAnnotationPicker();
   closeAllPanels();
@@ -487,7 +461,10 @@ function renderAnnList() {
     list.appendChild(item);
   });
   list.querySelectorAll(".ann-list-jump").forEach(btn =>
-    btn.addEventListener("click", () => { state.rendition?.display((btn as HTMLElement).dataset.cfi!); closeAllPanels(); })
+    btn.addEventListener("click", () => {
+      if (state.rendition) state.rendition.display((btn as HTMLElement).dataset.cfi!);
+      closeAllPanels();
+    })
   );
   list.querySelectorAll(".ann-list-edit").forEach(btn =>
     btn.addEventListener("click", () => {
@@ -504,7 +481,7 @@ function renderAnnList() {
       const cfi = (btn as HTMLElement).dataset.cfi!;
       state.annotations = state.annotations.filter(a => a.cfi !== cfi);
       saveAnnotations();
-      try { state.rendition.annotations.remove(cfi, "highlight"); } catch {}
+      try { state.rendition?.annotations.remove(cfi, "highlight"); } catch {}
       renderAnnList();
     })
   );
@@ -530,8 +507,15 @@ async function buildToc() {
         btn.className = "toc-item";
         btn.style.paddingLeft = `${1 + depth * 1.25}rem`;
         btn.textContent = item.label?.trim() ?? "";
-        btn.addEventListener("click", () => { state.rendition?.display(item.href); closeAllPanels(); });
-        list.appendChild(btn);
+        btn.addEventListener("click", () => {
+          if (state.pageMode.active) {
+            navigateToTocItem(item.href);
+          } else {
+            state.rendition?.display(item.href);
+          }
+          closeAllPanels();
+        });
+        list!.appendChild(btn);
         if (item.subitems?.length) renderItems(item.subitems, depth + 1);
       });
     }
@@ -547,7 +531,6 @@ async function generateLocations() {
     state.totalPages = state.book.locations.length();
     state.locationsReady = true;
     console.log(`[epub] locations ready: ${state.totalPages} total`);
-    // Re-compute with the last known location event (has percentage set now)
     if (state.currentCfi) {
       const { pct, page } = calcProgress(state.currentCfi, state.lastLocationEvent);
       updateProgressDisplay(pct, page);
@@ -555,99 +538,364 @@ async function generateLocations() {
   } catch (e) { console.warn("[epub] locations.generate failed:", e); }
 }
 
-// ─── Init ─────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── OPTION B: Custom Paginated Renderer ────────────────────────────────────
+// Uses epub.js for parsing only. Renders chapter HTML into a non-scrollable
+// div with CSS columns. Navigation via CSS transform — no native scroll.
+// ═══════════════════════════════════════════════════════════════════════════════
 
-export async function initEpubReader(bookData: Book, onStatus?: (msg: string) => void): Promise<void> {
-  const log = (msg: string) => { console.log(`[epub] ${msg}`); onStatus?.(msg); };
-
-  state.sessionStart = new Date();
-  state.currentCfi = "";
-  state.bookId = bookData.id;
-  state.totalPages = 0;
-  state.locationsReady = false;
-  state.prefs = loadPrefs();
-  loadAnnotations();
-
-  if (state.book) { try { state.book.destroy(); } catch {} state.book = null; state.rendition = null; }
-
-  const token = localStorage.getItem("bookworm_token") ?? "";
-  const fileUrl = `/api/reader/${bookData.id}/file?token=${encodeURIComponent(token)}`;
-  log("Loading epub…");
-
+async function initCustomPaginated(bookData: Book, log: (msg: string) => void) {
   const container = document.getElementById("epub-viewer")!;
-  // CSS handles sizing; no explicit px dimensions (avoids wrong size before fullscreen settles)
-  container.style.cssText = `position:absolute;inset:0;overflow:hidden`;
+  container.style.cssText = "position:absolute;inset:0;overflow:hidden;";
 
-  try { state.book = ePub(fileUrl, { openAs: "epub" }); } catch (e) { log(`ERROR: ${e}`); return; }
+  const t = THEMES[state.prefs.theme];
+  container.style.background = t.containerBg;
 
+  // Create the pages wrapper
+  const wrapper = document.createElement("div");
+  wrapper.className = "pages-wrapper";
+  wrapper.style.cssText = "position:absolute;inset:0;overflow:hidden;";
+  container.appendChild(wrapper);
+
+  const inner = document.createElement("div");
+  inner.className = "pages-inner";
+  inner.style.cssText = `
+    height: 100%;
+    column-fill: auto;
+    box-sizing: border-box;
+    overflow: hidden;
+    transition: transform 0.25s ease;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+  `;
+  wrapper.appendChild(inner);
+
+  state.pageMode.active = true;
+  state.pageMode.container = wrapper;
+  state.pageMode.currentPage = 0;
+
+  applyCustomPageStyles(inner);
+
+  // Determine starting chapter
+  let startChapter = 0;
   try {
-    await Promise.race([state.book.ready,
-      new Promise((_,r) => setTimeout(() => r(new Error("timeout")), 20000))]);
-    log("Book ready");
-  } catch (e) { log(`ERROR: ${e}`); return; }
+    const saved = await progressApi.get(bookData.id);
+    if (saved?.position) {
+      state.currentCfi = saved.position;
+      // Try to extract section index from CFI
+      const spineItems = state.book.spine?.spineItems ?? [];
+      for (let i = 0; i < spineItems.length; i++) {
+        try {
+          // Simple heuristic: try displaying and see which section the CFI belongs to
+          const cfiBase = spineItems[i].cfiBase;
+          if (state.currentCfi.includes(cfiBase?.replace?.("!", "") ?? "__none__")) {
+            startChapter = i;
+            break;
+          }
+        } catch {}
+      }
+    }
+  } catch {}
 
-  // Wait for fullscreen to settle so we measure the real viewport
-  await new Promise<void>(resolve => {
-    if (document.fullscreenElement) { resolve(); return; }
-    let done = false;
-    const fin = () => { if (!done) { done = true; resolve(); } };
-    document.addEventListener("fullscreenchange", fin, { once: true });
-    setTimeout(fin, 500); // fallback if no fullscreen
+  state.pageMode.chapterIndex = startChapter;
+  await loadChapter(startChapter, log);
+
+  // Touch handling for custom pages — simple, no hacks needed
+  let touchStartX = 0, touchStartY = 0, touchStartTime = 0;
+
+  wrapper.addEventListener("touchstart", (e: TouchEvent) => {
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+    touchStartTime = Date.now();
+  }, { passive: true });
+
+  wrapper.addEventListener("touchend", (e: TouchEvent) => {
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    const dy = e.changedTouches[0].clientY - touchStartY;
+    const dt = Date.now() - touchStartTime;
+
+    // Swipe
+    if (dt < 400 && Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 2) {
+      if (dx < 0) customPageNext();
+      else customPagePrev();
+      return;
+    }
+
+    // Tap
+    if (dt < 300 && Math.abs(dx) < 15 && Math.abs(dy) < 15) {
+      const w = wrapper.clientWidth;
+      const tapX = e.changedTouches[0].clientX;
+
+      // Check if tapped a link
+      const target = document.elementFromPoint(tapX, e.changedTouches[0].clientY);
+      if (target?.closest?.("a")) return; // let link work
+
+      if (tapX < w * 0.3) {
+        customPagePrev();
+      } else if (tapX > w * 0.7) {
+        customPageNext();
+      } else {
+        if (state.uiVisible) hideUI(); else showUI();
+      }
+    }
+  }, { passive: true });
+
+  // Mouse click for desktop
+  wrapper.addEventListener("click", (e: MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (target?.closest?.("a")) {
+      e.preventDefault();
+      const href = (target.closest("a") as HTMLAnchorElement).getAttribute("href");
+      if (href) navigateToTocItem(href);
+      return;
+    }
+
+    const w = wrapper.clientWidth;
+    if (e.clientX < w * 0.3) customPagePrev();
+    else if (e.clientX > w * 0.7) customPageNext();
+    else { if (state.uiVisible) hideUI(); else showUI(); }
   });
 
-  const w = container.offsetWidth || window.innerWidth;
-  const h = container.offsetHeight || window.innerHeight;
-  log(`Viewport: ${w}x${h}`);
+  log("Custom paginated mode ready");
+}
+
+async function loadChapter(index: number, log?: (msg: string) => void) {
+  const spineItems = state.book.spine?.spineItems ?? [];
+  if (index < 0 || index >= spineItems.length) return;
+
+  state.pageMode.chapterIndex = index;
+  const section = spineItems[index];
+
+  log?.(`Loading chapter ${index + 1}/${spineItems.length}...`);
 
   try {
-    state.rendition = state.book.renderTo(container, { width: w, height: h, spread: "none", flow: "paginated" });
+    const contents = await section.load(state.book.load.bind(state.book));
+    const serializer = new XMLSerializer();
+    const html = serializer.serializeToString(contents);
+
+    const wrapper = state.pageMode.container;
+    if (!wrapper) return;
+    const inner = wrapper.querySelector(".pages-inner") as HTMLElement;
+    if (!inner) return;
+
+    // Inject chapter HTML
+    inner.innerHTML = html;
+
+    // Fix images: resolve relative URLs to blob URLs from epub
+    const images = inner.querySelectorAll("img");
+    for (const img of images) {
+      const src = img.getAttribute("src");
+      if (src && !src.startsWith("http") && !src.startsWith("blob") && !src.startsWith("data")) {
+        try {
+          const resolved = new URL(src, section.url).href;
+          const blob = await state.book.archive?.getBlob(resolved);
+          if (blob) img.src = URL.createObjectURL(blob);
+        } catch {}
+      }
+    }
+
+    // Remove any scripts for safety
+    inner.querySelectorAll("script").forEach(s => s.remove());
+
+    // Apply styles
+    applyCustomPageStyles(inner);
+
+    // Apply scoped CSS from epub
+    await injectEpubStyles(inner, section);
+
+    // Calculate columns after content renders
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        recalcCustomPages();
+        state.pageMode.currentPage = 0;
+        setCustomPage(0);
+        log?.(`Chapter loaded: ${state.pageMode.totalPageCount} pages`);
+      });
+    });
+  } catch (e) {
+    log?.(`Error loading chapter: ${e}`);
+  }
+}
+
+async function injectEpubStyles(container: HTMLElement, section: any) {
+  // Remove existing epub styles
+  container.querySelectorAll("link[rel=stylesheet], style").forEach(el => {
+    // Keep our own styles
+    if ((el as HTMLElement).id === "bw-page-style") return;
+    el.remove();
+  });
+
+  // Load and inject stylesheet contents
+  try {
+    const doc = section.document ?? section.contents;
+    if (!doc) return;
+    const links = doc.querySelectorAll?.("link[rel=stylesheet]") ?? [];
+    for (const link of links) {
+      const href = link.getAttribute("href");
+      if (!href) continue;
+      try {
+        const resolved = new URL(href, section.url).href;
+        const text = await state.book.archive?.getText(resolved);
+        if (text) {
+          const style = document.createElement("style");
+          style.className = "bw-epub-injected-style";
+          style.textContent = text;
+          container.prepend(style);
+        }
+      } catch {}
+    }
+  } catch {}
+}
+
+function recalcCustomPages() {
+  const wrapper = state.pageMode.container;
+  if (!wrapper) return;
+  const inner = wrapper.querySelector(".pages-inner") as HTMLElement;
+  if (!inner) return;
+
+  const viewWidth = wrapper.clientWidth;
+  const { left: ml, right: mr } = state.prefs.margins;
+  const contentWidth = viewWidth - ml - mr;
+
+  inner.style.columnWidth = `${contentWidth}px`;
+  inner.style.columnGap = `${ml + mr}px`;
+  inner.style.width = `${viewWidth}px`;
+  inner.style.height = `${wrapper.clientHeight}px`;
+
+  state.pageMode.columnWidth = viewWidth;
+
+  // Wait for layout
+  requestAnimationFrame(() => {
+    const totalWidth = inner.scrollWidth;
+    state.pageMode.totalPageCount = Math.max(1, Math.ceil(totalWidth / viewWidth));
+    updateCustomProgress();
+  });
+}
+
+function setCustomPage(page: number) {
+  const pm = state.pageMode;
+  pm.currentPage = Math.max(0, Math.min(page, pm.totalPageCount - 1));
+
+  const inner = pm.container?.querySelector(".pages-inner") as HTMLElement;
+  if (inner) {
+    inner.style.transform = `translateX(-${pm.currentPage * pm.columnWidth}px)`;
+  }
+  updateCustomProgress();
+}
+
+function customPageNext() {
+  const pm = state.pageMode;
+  if (pm.currentPage < pm.totalPageCount - 1) {
+    setCustomPage(pm.currentPage + 1);
+  } else {
+    // Next chapter
+    const spineItems = state.book.spine?.spineItems ?? [];
+    if (pm.chapterIndex < spineItems.length - 1) {
+      loadChapter(pm.chapterIndex + 1);
+    }
+  }
+  resetUiTimer();
+}
+
+function customPagePrev() {
+  const pm = state.pageMode;
+  if (pm.currentPage > 0) {
+    setCustomPage(pm.currentPage - 1);
+  } else {
+    // Previous chapter — go to last page
+    if (pm.chapterIndex > 0) {
+      const prevIdx = pm.chapterIndex - 1;
+      loadChapter(prevIdx).then(() => {
+        // After chapter loads, jump to last page
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            setCustomPage(state.pageMode.totalPageCount - 1);
+          });
+        });
+      });
+    }
+  }
+  resetUiTimer();
+}
+
+function updateCustomProgress() {
+  const { pct, page } = calcProgress("", null);
+  updateProgressDisplay(pct, page);
+}
+
+function navigateToTocItem(href: string) {
+  if (!state.book) return;
+
+  // Find which spine section this href belongs to
+  const spineItems = state.book.spine?.spineItems ?? [];
+  const cleanHref = href.split("#")[0];
+
+  for (let i = 0; i < spineItems.length; i++) {
+    const sectionHref = spineItems[i].href;
+    if (sectionHref === cleanHref || sectionHref.endsWith(cleanHref) || cleanHref.endsWith(sectionHref)) {
+      if (state.pageMode.active) {
+        loadChapter(i);
+      } else {
+        state.rendition?.display(href);
+      }
+      return;
+    }
+  }
+
+  // Fallback: try displaying directly
+  if (state.rendition) state.rendition.display(href);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── OPTION A: Scrolled Mode (epub.js flow: "scrolled") ────────────────────
+// No overlay, no touch hacks. Native vertical scroll. Links just work.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function initScrolledMode(bookData: Book, log: (msg: string) => void) {
+  const container = document.getElementById("epub-viewer")!;
+  container.style.cssText = "position:absolute;inset:0;overflow:hidden;";
+
+  try {
+    state.rendition = state.book.renderTo(container, {
+      width: "100%",
+      height: "100%",
+      flow: "scrolled",
+      manager: "continuous",
+    });
   } catch (e) { log(`ERROR: ${e}`); return; }
 
-  // Resize rendition if fullscreen state changes after init
   const onFullscreenResize = () => {
-    const nw = container.offsetWidth || window.innerWidth;
-    const nh = container.offsetHeight || window.innerHeight;
-    state.rendition?.resize(nw, nh);
+    state.rendition?.resize?.(
+      container.offsetWidth || window.innerWidth,
+      container.offsetHeight || window.innerHeight
+    );
   };
   document.addEventListener("fullscreenchange", onFullscreenResize);
 
+  // Restore saved position
   try {
     const saved = await progressApi.get(bookData.id);
     if (saved?.position) state.currentCfi = saved.position;
   } catch {}
 
   try {
-    await Promise.race([state.rendition.display(state.currentCfi || undefined),
-      new Promise((_,r) => setTimeout(() => r(new Error("display() timeout")), 20000))]);
+    await Promise.race([
+      state.rendition.display(state.currentCfi || undefined),
+      new Promise((_, r) => setTimeout(() => r(new Error("display() timeout")), 20000)),
+    ]);
     log("SUCCESS");
   } catch (e) { log(`ERROR: ${e}`); return; }
 
   applyPrefs();
   applyAnnotations();
-  buildToc();
-  generateLocations(); // async — page count appears when ready
 
-  // ── Navigation helpers ──
-  const iframePrev = () => { state.rendition?.prev(); resetUiTimer(); };
-  const iframeNext = () => { state.rendition?.next(); resetUiTimer(); };
-
-  _iframePrev = iframePrev;
-  _iframeNext = iframeNext;
-  _toggleUI = () => { if (state.uiVisible) hideUI(); else showUI(); };
-
-  // ── Lock containers + attach iframe touch handlers ──
-  lockEpubContainers();
-  attachIframeTouchHandlers();
-
-  // ── Re-apply on every page render ──
+  // ── Re-apply styles on every page render ──
   state.rendition.on("rendered", () => {
-    lockEpubContainers();
     applyIframeStyles();
-    attachIframeTouchHandlers();
     applyAnnotations();
   });
 
-  // ── Progress + auto-save ──
+  // ── Progress tracking ──
   let saveDebounce: ReturnType<typeof setTimeout> | null = null;
   state.rendition.on("locationChanged", (location: any) => {
     const cfi = location?.start?.cfi ?? "";
@@ -659,9 +907,8 @@ export async function initEpubReader(bookData: Book, onStatus?: (msg: string) =>
     saveDebounce = setTimeout(() => saveProgress(bookData.id), 800);
   });
 
-  // ── Text selection → capture IMMEDIATELY then show colour picker ──
+  // ── Text selection → highlight picker ──
   state.rendition.on("selected", (cfiRange: string, contents: any) => {
-    // Capture the selection text right now, before anything clears it
     let text = "";
     try { text = contents?.window?.getSelection()?.toString() ?? ""; } catch {}
     if (!text && cfiRange) {
@@ -682,60 +929,73 @@ export async function initEpubReader(bookData: Book, onStatus?: (msg: string) =>
     openCommentSheet();
   });
 
-  // ── Navigation: buttons ──
-  document.getElementById("epub-prev-btn")?.addEventListener("click", iframePrev);
-  document.getElementById("epub-next-btn")?.addEventListener("click", iframeNext);
-
-  // ── Progress inputs ──
-  const pctInput = document.getElementById("epub-pct-input") as HTMLInputElement;
-  pctInput?.addEventListener("focus", () => pctInput.select());
-  pctInput?.addEventListener("keydown", e => {
-    if (e.key !== "Enter") return;
-    pctInput.blur();
-    const pct = parseFloat(pctInput.value.replace("%","").trim());
-    if (!isNaN(pct) && pct >= 0 && pct <= 100) {
-      if (state.locationsReady) {
-        const cfi = state.book.locations.cfiFromPercentage(pct / 100);
-        if (cfi) { state.rendition?.display(cfi); return; }
-      }
-      // Fallback: jump by spine section
-      const numSections = (state.book?.spine?.spineItems ?? []).length;
-      const targetSection = Math.floor((pct / 100) * numSections);
-      const section = state.book?.spine?.spineItems[targetSection];
-      if (section) state.rendition?.display(section.href);
-    }
+  // ── Prev/Next buttons navigate chapters in scroll mode ──
+  document.getElementById("epub-prev-btn")?.addEventListener("click", () => {
+    state.rendition?.prev(); resetUiTimer();
   });
-  pctInput?.addEventListener("blur", () => {
-    const { pct } = calcProgress(state.currentCfi, state.lastLocationEvent);
-    pctInput.value = `${pct}%`;
+  document.getElementById("epub-next-btn")?.addEventListener("click", () => {
+    state.rendition?.next(); resetUiTimer();
   });
 
-  const pageInput = document.getElementById("epub-page-input") as HTMLInputElement;
-  pageInput?.addEventListener("focus", () => pageInput.select());
-  pageInput?.addEventListener("keydown", e => {
-    if (e.key !== "Enter") return;
-    pageInput.blur();
-    const page = parseInt(pageInput.value.trim(), 10);
-    if (isNaN(page)) return;
-    if (state.locationsReady && state.totalPages > 0) {
-      // Convert page → percentage → CFI (all from same locations system)
-      const pct = Math.min(1, Math.max(0, (page - 1) / (state.totalPages - 1)));
-      const cfi = state.book.locations.cfiFromPercentage(pct);
-      if (cfi) { state.rendition?.display(cfi); return; }
-    }
-    // Fallback: spine section jump
-    const numSections = (state.book?.spine?.spineItems ?? []).length;
-    const totalEst = state.totalPages || numSections * 10;
-    const targetSection = Math.min(numSections - 1, Math.floor(((page - 1) / totalEst) * numSections));
-    const section = state.book?.spine?.spineItems[targetSection];
-    if (section) state.rendition?.display(section.href);
-  });
-  pageInput?.addEventListener("blur", () => {
-    const { page } = calcProgress(state.currentCfi, state.lastLocationEvent);
-    pageInput.value = page != null ? String(page) : "…";
+  // Store cleanup handler
+  const cleanup = () => {
+    document.removeEventListener("fullscreenchange", onFullscreenResize);
+  };
+  document.addEventListener("page:mounted", cleanup, { once: true });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Init (entry point) ─────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export async function initEpubReader(bookData: Book, onStatus?: (msg: string) => void): Promise<void> {
+  const log = (msg: string) => { console.log(`[epub] ${msg}`); onStatus?.(msg); };
+
+  state.sessionStart = new Date();
+  state.currentCfi = "";
+  state.bookId = bookData.id;
+  state.totalPages = 0;
+  state.locationsReady = false;
+  state.prefs = loadPrefs();
+  state.pageMode = { active: false, container: null, currentPage: 0, totalPageCount: 0, chapterIndex: 0, chapterHtml: "", columnWidth: 0 };
+  loadAnnotations();
+
+  if (state.book) { try { state.book.destroy(); } catch {} state.book = null; state.rendition = null; }
+
+  const token = localStorage.getItem("bookworm_token") ?? "";
+  const fileUrl = `/api/reader/${bookData.id}/file?token=${encodeURIComponent(token)}`;
+  log("Loading epub…");
+
+  try { state.book = ePub(fileUrl, { openAs: "epub" }); } catch (e) { log(`ERROR: ${e}`); return; }
+
+  try {
+    await Promise.race([state.book.ready,
+      new Promise((_,r) => setTimeout(() => r(new Error("timeout")), 20000))]);
+    log("Book ready");
+  } catch (e) { log(`ERROR: ${e}`); return; }
+
+  // Wait for fullscreen to settle
+  await new Promise<void>(resolve => {
+    if (document.fullscreenElement) { resolve(); return; }
+    let done = false;
+    const fin = () => { if (!done) { done = true; resolve(); } };
+    document.addEventListener("fullscreenchange", fin, { once: true });
+    setTimeout(fin, 500);
   });
 
-  // ── TOC + panels ──
+  log(`Mode: ${state.prefs.readingMode}`);
+
+  // ── Initialize based on reading mode ──
+  if (state.prefs.readingMode === "pages") {
+    await initCustomPaginated(bookData, log);
+  } else {
+    await initScrolledMode(bookData, log);
+  }
+
+  buildToc();
+  generateLocations();
+
+  // ── Settings controls (shared) ──
   document.getElementById("toc-btn")?.addEventListener("click", openToc);
   document.getElementById("toc-close")?.addEventListener("click", closeAllPanels);
   document.getElementById("ann-list-btn")?.addEventListener("click", openAnnList);
@@ -744,6 +1004,21 @@ export async function initEpubReader(bookData: Book, onStatus?: (msg: string) =>
   document.getElementById("reader-overlay")?.addEventListener("click", () => {
     closeAllPanels(); hideAnnotationPicker();
   });
+
+  // ── Reading mode toggle ──
+  document.querySelectorAll(".mode-btn").forEach(btn =>
+    btn.addEventListener("click", () => {
+      const newMode = (btn as HTMLElement).dataset.mode as ReadingMode;
+      if (newMode === state.prefs.readingMode) return;
+      state.prefs.readingMode = newMode;
+      savePrefs();
+      // Save progress before switching
+      saveProgress(bookData.id).then(() => {
+        // Full reload of reader with new mode
+        window.location.reload();
+      });
+    })
+  );
 
   // ── Theme ──
   document.querySelectorAll(".theme-btn").forEach(btn =>
@@ -781,42 +1056,98 @@ export async function initEpubReader(bookData: Book, onStatus?: (msg: string) =>
     if (state.pendingCfi) {
       state.annotations = state.annotations.filter(a => a.cfi !== state.pendingCfi);
       saveAnnotations();
-      try { state.rendition.annotations.remove(state.pendingCfi, "highlight"); } catch {}
+      try { state.rendition?.annotations.remove(state.pendingCfi, "highlight"); } catch {}
     }
     hideAnnotationPicker();
   });
 
-  // ── Note sheet: save / skip ──
   document.getElementById("ann-comment-save")?.addEventListener("click", () => {
     const note = (document.getElementById("ann-comment-input") as HTMLTextAreaElement)?.value.trim() ?? "";
     commitAnnotation(note);
   });
   document.getElementById("ann-comment-skip")?.addEventListener("click", () => commitAnnotation(""));
 
+  // ── Progress inputs ──
+  const pctInput = document.getElementById("epub-pct-input") as HTMLInputElement;
+  pctInput?.addEventListener("focus", () => pctInput.select());
+  pctInput?.addEventListener("keydown", e => {
+    if (e.key !== "Enter") return;
+    pctInput.blur();
+    const pct = parseFloat(pctInput.value.replace("%","").trim());
+    if (!isNaN(pct) && pct >= 0 && pct <= 100) {
+      if (state.pageMode.active) {
+        // Jump to approximate chapter + page in custom mode
+        const spineItems = state.book.spine?.spineItems ?? [];
+        const targetChapter = Math.floor((pct / 100) * spineItems.length);
+        loadChapter(Math.min(targetChapter, spineItems.length - 1));
+      } else if (state.locationsReady) {
+        const cfi = state.book.locations.cfiFromPercentage(pct / 100);
+        if (cfi) state.rendition?.display(cfi);
+      } else {
+        const numSections = (state.book?.spine?.spineItems ?? []).length;
+        const targetSection = Math.floor((pct / 100) * numSections);
+        const section = state.book?.spine?.spineItems[targetSection];
+        if (section) state.rendition?.display(section.href);
+      }
+    }
+  });
+  pctInput?.addEventListener("blur", () => {
+    const { pct } = calcProgress(state.currentCfi, state.lastLocationEvent);
+    pctInput.value = `${pct}%`;
+  });
+
+  const pageInput = document.getElementById("epub-page-input") as HTMLInputElement;
+  pageInput?.addEventListener("focus", () => pageInput.select());
+  pageInput?.addEventListener("keydown", e => {
+    if (e.key !== "Enter") return;
+    pageInput.blur();
+    const page = parseInt(pageInput.value.trim(), 10);
+    if (isNaN(page)) return;
+    if (state.pageMode.active) {
+      // In custom mode, page input navigates within current chapter
+      setCustomPage(page - 1);
+    } else if (state.locationsReady && state.totalPages > 0) {
+      const pct = Math.min(1, Math.max(0, (page - 1) / (state.totalPages - 1)));
+      const cfi = state.book.locations.cfiFromPercentage(pct);
+      if (cfi) state.rendition?.display(cfi);
+    }
+  });
+  pageInput?.addEventListener("blur", () => {
+    const { page } = calcProgress(state.currentCfi, state.lastLocationEvent);
+    pageInput.value = page != null ? String(page) : "…";
+  });
+
+  // ── Prev/Next for custom paginated ──
+  if (state.pageMode.active) {
+    document.getElementById("epub-prev-btn")?.addEventListener("click", () => customPagePrev());
+    document.getElementById("epub-next-btn")?.addEventListener("click", () => customPageNext());
+  }
+
   // ── Start UI hide timer ──
   showUI();
+  syncSettingsUI();
 
-  // ── Cleanup ──
+  // ── Auto-save + cleanup ──
   state.saveTimer = setInterval(() => saveProgress(bookData.id), 30_000);
-  const cleanup = () => {
+  const masterCleanup = () => {
     if (state.saveTimer) clearInterval(state.saveTimer);
     if (state.uiTimer) clearTimeout(state.uiTimer);
-    document.removeEventListener("fullscreenchange", onFullscreenResize);
     saveProgress(bookData.id);
     try { state.book?.destroy(); } catch {}
-    document.removeEventListener("page:mounted", cleanup);
+    document.removeEventListener("page:mounted", masterCleanup);
   };
-  document.addEventListener("page:mounted", cleanup, { once: true });
+  document.addEventListener("page:mounted", masterCleanup, { once: true });
 }
 
 // ─── Save progress ───────────────────────────────────────────────────────────
 
 async function saveProgress(bookId: number): Promise<void> {
-  if (!state.currentCfi) return;
+  if (!state.currentCfi && !state.pageMode.active) return;
   const now = new Date();
   const { pct } = calcProgress(state.currentCfi, state.lastLocationEvent);
+  const position = state.currentCfi || `chapter:${state.pageMode.chapterIndex}:page:${state.pageMode.currentPage}`;
   try {
-    await progressApi.update(bookId, state.currentCfi, pct, 0, 0,
+    await progressApi.update(bookId, position, pct, 0, 0,
       state.sessionStart.toISOString(), now.toISOString());
     state.sessionStart = now;
   } catch {}

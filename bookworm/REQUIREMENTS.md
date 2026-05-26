@@ -148,8 +148,11 @@ Built with TypeScript, JavaScript, CSS (frontend) and Python (backend).
   - [ ] Push notifications (future — requires VAPID/service worker integration)
   - [ ] Reminders when a book club meeting is due (future)
 
-### Phase 6 — Reader Bug Fixes (see BUGS.md for full details)
-- [ ] Center tap causes backward page navigation (epub.js column-snap scroll)
-- [ ] Page counter / progress never updates (CFI binary search unreliable)
-- [ ] Internal epub links not working (overlay blocks iframe clicks)
-- [ ] Epub reader stops rendering pages after a few navigations (touch overlay may block epub.js's internal iframe swap/layout cycle; pages go blank)
+### Phase 6 — Reader Rework (see BUGS.md for full analysis)
+- [x] **Option A: Scrolled mode** — default reading mode, uses epub.js `flow: "scrolled"` + `manager: "continuous"`. No overlay, no touch hacks. Fixes all 4 bugs.
+- [x] **Reading mode toggle** — Scroll / Pages toggle in reader settings. Persisted to localStorage.
+- [x] **Option B: Custom paginated renderer** — uses epub.js for parsing only. Renders chapter HTML into a non-scrollable div with CSS columns. Navigation via CSS `transform: translateX()`. Tap zones for prev/next/toggle-UI. Links work natively.
+- [x] Center tap backward navigation — fixed (no column-snap scroll in either mode)
+- [x] Page counter / progress — fixed (spine + displayed.page/total in scroll mode; pageIndex/totalColumns in pages mode)
+- [x] Internal epub links — fixed (no overlay blocking clicks in either mode)
+- [x] Pages go blank — fixed (no overlay interfering with layout in either mode)
