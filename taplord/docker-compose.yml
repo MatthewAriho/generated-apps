@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  taplord-api:
+    build: ./backend
+    container_name: taplord-api
+    restart: unless-stopped
+    environment:
+      - DATA_PATH=/data
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+    volumes:
+      - ./data:/data
+    expose:
+      - "8000"
+
+  taplord-web:
+    build: ./nginx
+    container_name: taplord-web
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3090}:80"
+    depends_on:
+      - taplord-api
