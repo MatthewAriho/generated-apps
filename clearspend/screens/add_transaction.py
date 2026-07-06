@@ -10,6 +10,7 @@ from kivymd.uix.menu import MDDropdownMenu
 from kivymd.uix.snackbar import Snackbar
 
 KV = """
+#:import ScrollEffect kivy.effects.scroll.ScrollEffect
 <AddTransactionScreen>:
     name: 'add_transaction'
 
@@ -24,6 +25,7 @@ KV = """
 
         ScrollView:
             do_scroll_x: False
+            effect_cls: ScrollEffect
 
             MDBoxLayout:
                 orientation: 'vertical'
@@ -31,6 +33,12 @@ KV = """
                 height: self.minimum_height
                 padding: [dp(20), dp(16)]
                 spacing: dp(14)
+                canvas.before:
+                    Color:
+                        rgba: app.theme_cls.bg_normal
+                    Rectangle:
+                        pos: self.pos
+                        size: self.size
 
                 # ── Type toggle ──────────────────────────────────────────
                 MDBoxLayout:

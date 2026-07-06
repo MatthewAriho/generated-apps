@@ -114,6 +114,25 @@ class Database:
                 FOREIGN KEY (bank_account_id) REFERENCES bank_accounts(id)
             );
 
+            CREATE TABLE IF NOT EXISTS events (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                name             TEXT NOT NULL,
+                description      TEXT DEFAULT '',
+                start_date       TEXT NOT NULL,
+                end_date         TEXT NOT NULL,
+                location_keyword TEXT DEFAULT '',
+                color_index      INTEGER DEFAULT 0,
+                created_at       TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS event_transactions (
+                event_id       INTEGER NOT NULL,
+                transaction_id INTEGER NOT NULL,
+                PRIMARY KEY (event_id, transaction_id),
+                FOREIGN KEY (event_id)       REFERENCES events(id)       ON DELETE CASCADE,
+                FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
+            );
+
             -- User-defined and built-in classification rules.
             -- keyword is matched as a case-insensitive substring of description.
             -- priority: user rules (source='user') beat built-in (source='builtin').
@@ -668,6 +687,109 @@ class Database:
     def delete_goal(self, goal_id: int):
         self.conn.execute("DELETE FROM goals WHERE id = ?", (goal_id,))
         self.conn.commit()
+
+    # --------------------------------------------------------- events
+    _EVENT_COLORS = [
+        (0.2, 0.6, 1.0, 1),   # 0 blue
+        (0.2, 0.8, 0.45, 1),  # 1 green
+        (1.0, 0.55, 0.1, 1),  # 2 orange
+        (0.85, 0.2, 0.55, 1), # 3 pink
+        (0.55, 0.3, 0.9, 1),  # 4 purple
+        (0.1, 0.75, 0.75, 1), # 5 teal
+    ]
+
+    def create_event(self, name: str, description: str, start_date: str,
+                     end_date: str, location_keyword: str = "",
+                     color_index: int = 0) -> int:
+        cur = self.conn.execute(
+            """INSERT INTO events(name, description, start_date, end_date,
+               location_keyword, color_index, created_at)
+               VALUES(?,?,?,?,?,?,?)""",
+            (name, description, start_date, end_date,
+             location_keyword.lower().strip(), color_index,
+             datetime.now().isoformat()),
+        )
+        self.conn.commit()
+        event_id = cur.lastrowid
+        if location_keyword:
+            self._auto_assign_event(event_id, start_date, end_date, location_keyword)
+        return event_id
+
+    def _auto_assign_event(self, event_id: int, start_date: str,
+                           end_date: str, keyword: str):
+        kw = keyword.lower().strip()
+        rows = self.conn.execute(
+            "SELECT id, description FROM transactions WHERE date BETWEEN ? AND ?",
+            (start_date, end_date),
+        ).fetchall()
+        for row in rows:
+            if kw in (row[1] or "").lower():
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO event_transactions VALUES(?,?)",
+                    (event_id, row[0]),
+                )
+        self.conn.commit()
+
+    def get_events(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM events ORDER BY start_date DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_event(self, event_id: int) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM events WHERE id=?", (event_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def delete_event(self, event_id: int):
+        self.conn.execute("DELETE FROM event_transactions WHERE event_id=?", (event_id,))
+        self.conn.execute("DELETE FROM events WHERE id=?", (event_id,))
+        self.conn.commit()
+
+    def get_event_transactions(self, event_id: int) -> list[dict]:
+        rows = self.conn.execute(
+            """SELECT t.* FROM transactions t
+               JOIN event_transactions et ON et.transaction_id = t.id
+               WHERE et.event_id = ?
+               ORDER BY t.date DESC""",
+            (event_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_event_summary(self, event_id: int) -> dict:
+        rows = self.get_event_transactions(event_id)
+        total   = sum(r["amount"] for r in rows if r["type"] == "expense")
+        income  = sum(r["amount"] for r in rows if r["type"] == "income")
+        by_cat: dict[str, float] = {}
+        for r in rows:
+            if r["type"] == "expense":
+                by_cat[r["category"] or "Other"] = by_cat.get(r["category"] or "Other", 0) + r["amount"]
+        return {"total": total, "income": income, "count": len(rows), "by_category": by_cat}
+
+    def add_transaction_to_event(self, event_id: int, transaction_id: int):
+        self.conn.execute(
+            "INSERT OR IGNORE INTO event_transactions VALUES(?,?)",
+            (event_id, transaction_id),
+        )
+        self.conn.commit()
+
+    def remove_transaction_from_event(self, event_id: int, transaction_id: int):
+        self.conn.execute(
+            "DELETE FROM event_transactions WHERE event_id=? AND transaction_id=?",
+            (event_id, transaction_id),
+        )
+        self.conn.commit()
+
+    def get_transaction_events(self, transaction_id: int) -> list[dict]:
+        """Return all events a transaction belongs to."""
+        rows = self.conn.execute(
+            """SELECT e.* FROM events e
+               JOIN event_transactions et ON et.event_id = e.id
+               WHERE et.transaction_id = ?""",
+            (transaction_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     # --------------------------------------------------------- export / backup
     def export_to_dict(self) -> dict:

@@ -8,3 +8,13 @@ build/
 new_prompt.md
 app_2026*/
 calculator/
+
+# CineQueue runtime data
+cinequeue-pwa/cinequeue.json
+cinequeue-pwa/cinequeue_downloads.json
+cinequeue-pwa/cinequeue_movies.json
+cinequeue-pwa/cinequeue_posters/
+
+# Node
+node_modules/
+dist/

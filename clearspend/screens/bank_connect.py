@@ -15,6 +15,7 @@ from kivymd.uix.snackbar import Snackbar
 from kivymd.uix.textfield import MDTextField
 
 KV = """
+#:import ScrollEffect kivy.effects.scroll.ScrollEffect
 <BankConnectTab>:
     orientation: 'vertical'
     md_bg_color: app.theme_cls.bg_normal
@@ -30,6 +31,7 @@ KV = """
 
     ScrollView:
         do_scroll_x: False
+        effect_cls: ScrollEffect
 
         MDBoxLayout:
             id: content_box
@@ -38,6 +40,12 @@ KV = """
             height: self.minimum_height
             padding: [dp(12), dp(12)]
             spacing: dp(12)
+            canvas.before:
+                Color:
+                    rgba: app.theme_cls.bg_normal
+                Rectangle:
+                    pos: self.pos
+                    size: self.size
 
             # ── No accounts placeholder ───────────────────────────────
             MDBoxLayout:

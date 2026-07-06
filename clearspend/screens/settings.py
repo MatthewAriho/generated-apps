@@ -12,6 +12,7 @@ from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.snackbar import Snackbar
 
 KV = """
+#:import ScrollEffect kivy.effects.scroll.ScrollEffect
 <SettingsTab>:
     orientation: 'vertical'
     md_bg_color: app.theme_cls.bg_normal
@@ -22,6 +23,7 @@ KV = """
 
     ScrollView:
         do_scroll_x: False
+        effect_cls: ScrollEffect
 
         MDBoxLayout:
             orientation: 'vertical'
@@ -29,6 +31,12 @@ KV = """
             height: self.minimum_height
             padding: [dp(16), dp(12)]
             spacing: dp(4)
+            canvas.before:
+                Color:
+                    rgba: app.theme_cls.bg_normal
+                Rectangle:
+                    pos: self.pos
+                    size: self.size
 
             # ── Security ─────────────────────────────────────────────
             MDLabel:
