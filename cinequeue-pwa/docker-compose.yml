@@ -1,0 +1,20 @@
+# CineQueue PWA — single container to keep RAM low on DS224+
+# Port 8100 chosen (see references/funnel.md port ledger)
+# Uses tailscale serve (tailnet-only) because app handles credentials
+services:
+  cinequeue:
+    image: python:3.12-slim
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./:/app
+    working_dir: /app
+    command: >
+      sh -c "pip install --no-cache-dir -r requirements.txt &&
+             uvicorn main:app --host 0.0.0.0 --port 8100 --workers 1"
+    environment:
+      - TZ=America/Vancouver
+    deploy:
+      resources:
+        limits:
+          memory: 256M

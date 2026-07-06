@@ -963,7 +963,7 @@ export async function initEpubReader(bookData: Book, onStatus?: (msg: string) =>
   if (state.book) { try { state.book.destroy(); } catch {} state.book = null; state.rendition = null; }
 
   const token = localStorage.getItem("bookworm_token") ?? "";
-  const fileUrl = `/api/reader/${bookData.id}/file?token=${encodeURIComponent(token)}`;
+  const fileUrl = `/bookworm/api/reader/${bookData.id}/file?token=${encodeURIComponent(token)}`;
   log("Loading epub…");
 
   try { state.book = ePub(fileUrl, { openAs: "epub" }); } catch (e) { log(`ERROR: ${e}`); return; }

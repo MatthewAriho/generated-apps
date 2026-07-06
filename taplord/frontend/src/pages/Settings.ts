@@ -81,7 +81,7 @@ export async function initSettings(): Promise<void> {
 
     try {
       // Try to update -- if endpoint doesn't exist yet, just show saved locally
-      await fetch("/api/users/me", {
+      await fetch("/taplord/api/users/me", {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",

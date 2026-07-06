@@ -1,6 +1,6 @@
 import { getAuthHeaders, setToken } from "./auth";
 
-const BASE = "/api";
+const BASE = "/bookworm/api";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {

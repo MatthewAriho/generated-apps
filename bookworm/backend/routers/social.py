@@ -246,7 +246,7 @@ def view_friend_shelf(user_id: int, db: Session = Depends(get_db), user: models.
             "book_id": ub.book.id,
             "title": ub.book.title,
             "author": ub.book.author,
-            "cover_url": ub.book.cover_url,
+            "cover_url": f"/bookworm{ub.book.cover_url}" if ub.book.cover_url else None,
             "status": ub.status.value,
             "progress": prog.percentage if prog else 0,
         })
@@ -649,7 +649,7 @@ def activity_feed(db: Session = Depends(get_db), user: models.User = Depends(get
             "user": _user_public(ub.user),
             "book_title": ub.book.title,
             "book_id": ub.book.id,
-            "cover_url": ub.book.cover_url,
+            "cover_url": f"/bookworm{ub.book.cover_url}" if ub.book.cover_url else None,
             "timestamp": ub.finished_at.isoformat() if ub.finished_at else ub.added_at.isoformat(),
         })
 

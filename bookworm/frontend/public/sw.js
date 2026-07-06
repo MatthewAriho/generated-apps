@@ -1,5 +1,5 @@
-const CACHE_NAME = "bookworm-v25";
-const STATIC_ASSETS = ["/", "/index.html"];
+const CACHE_NAME = "bookworm-v27";
+const STATIC_ASSETS = ["/bookworm/", "/bookworm/index.html"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -21,7 +21,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
 
   // Network-first for API calls
-  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/covers/")) {
+  if (url.pathname.startsWith("/bookworm/api/") || url.pathname.startsWith("/bookworm/covers/")) {
     event.respondWith(
       fetch(event.request).catch(() => caches.match(event.request))
     );

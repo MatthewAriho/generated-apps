@@ -1,19 +1,21 @@
 [app]
-title = Dating Assistant
-package.name = datingassistant
-package.domain = org.datingassistant
+title = Kindling
+package.name = kindling
+package.domain = org.kindling
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,json
 source.exclude_dirs = build,.buildozer,bin,__pycache__
-version = 2.3
+version = 2.71
 requirements = python3,kivy==2.2.1,kivymd==1.1.1,openssl
 orientation = portrait
 osx.python_version = 3
 osx.kivy_version = 2.2.1
 fullscreen = 0
-android.presplash_color = #FFFFFF
+icon.filename = %(source.dir)s/assets/icon.png
+presplash.filename = %(source.dir)s/assets/presplash.png
+android.presplash_color = #FFF5EE
 android.allow_backup = True
-android.permissions = WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,INTERNET
+android.permissions = WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,READ_MEDIA_IMAGES,INTERNET
 android.api = 34
 android.minapi = 26
 android.ndk = 25b

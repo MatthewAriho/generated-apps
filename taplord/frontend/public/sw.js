@@ -1,5 +1,5 @@
-const CACHE_NAME = "taplord-v1";
-const STATIC_ASSETS = ["/", "/index.html", "/manifest.json"];
+const CACHE_NAME = "taplord-v3";
+const STATIC_ASSETS = ["/taplord/", "/taplord/index.html", "/taplord/manifest.json"];
 
 // Install: cache static shell
 self.addEventListener("install", (event) => {
@@ -26,7 +26,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
 
   // API calls: network-first
-  if (url.pathname.startsWith("/api")) {
+  if (url.pathname.startsWith("/taplord/api")) {
     event.respondWith(
       fetch(event.request).catch(() =>
         caches.match(event.request).then((cached) => cached || new Response('{"error":"offline"}', {

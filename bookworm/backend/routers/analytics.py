@@ -166,7 +166,7 @@ def reading_profile(
                     "book_id": book.id,
                     "title": book.title,
                     "author": book.author,
-                    "cover_url": book.cover_url,
+                    "cover_url": f"/bookworm{book.cover_url}" if book.cover_url else None,
                     "reason": f"Matches your interest in {', '.join(overlap)}",
                 })
             if len(recommendations) >= 5:

@@ -93,7 +93,7 @@ async function bootSettings(): Promise<void> {
 
   // Load integrations status
   try {
-    const resp = await fetch("/api/settings/integrations", { headers: getAuthHeaders() });
+    const resp = await fetch("/bookworm/api/settings/integrations", { headers: getAuthHeaders() });
     const data = await resp.json();
     const el = document.getElementById("integrations-info")!;
     const prowlarrStatus = data.prowlarr_configured

@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#ff5722">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Kindling</title>
+  <link rel="manifest" href="/kindling/manifest.json">
+  <link rel="stylesheet" href="/kindling/static/style.css">
+  <link rel="icon" href="/kindling/static/icon-192.png">
+</head>
+<body>
+
+  <!-- ── Chat tab ── -->
+  <div class="tab active" id="tab-chat">
+    <div class="chat-header">
+      <span class="chat-header-title">&#128293; Kindling</span>
+      <button onclick="switchTab('history')" title="Chat history">&#128218;</button>
+      <button onclick="startNewChat()" title="New chat">&#10010;</button>
+    </div>
+    <div class="chat-messages" id="chat-messages"></div>
+    <div class="img-preview" id="img-preview" style="display:none">
+      <span id="img-preview-name"></span>
+      <button onclick="clearImage()" title="Remove image">&#10005;</button>
+    </div>
+    <div class="chat-input-bar">
+      <button class="img-btn" onclick="document.getElementById('img-picker').click()" title="Attach image">&#128247;</button>
+      <input type="file" id="img-picker" accept="image/*" style="display:none" onchange="onImagePicked(this)">
+      <input type="text" id="chat-input" placeholder="Type here..." autocomplete="off">
+      <button class="clear-btn" onclick="clearChat()" title="Clear chat">&#10005;</button>
+      <button onclick="sendMessage()" id="send-btn" title="Send">&#10148;</button>
+    </div>
+  </div>
+
+  <!-- ── Icebreakers tab ── -->
+  <div class="tab" id="tab-ice">
+    <div class="tab-header">Icebreakers & Openers</div>
+    <div class="ice-controls">
+      <input type="text" id="ice-context" placeholder='e.g. "Hinge match, loves hiking & dogs"'>
+      <div class="ice-btns">
+        <button class="app-btn" onclick="genOpener('app')">App Opener</button>
+        <button class="person-btn" onclick="genOpener('inperson')">In-Person</button>
+        <button class="date-btn" onclick="genOpener('date')">Date Ideas</button>
+      </div>
+    </div>
+    <div class="scroll-area" id="ice-results"></div>
+  </div>
+
+  <!-- ── Track tab ── -->
+  <div class="tab" id="tab-track">
+    <div class="tab-header">Track Results</div>
+    <div class="track-controls">
+      <textarea id="track-note" placeholder="What happened? What did you try?"></textarea>
+      <div class="track-btns">
+        <button class="win-btn" onclick="logTrack('success')">Log a Win!</button>
+        <button class="miss-btn" onclick="logTrack('failure')">Didn't Work</button>
+      </div>
+    </div>
+    <div class="track-stats">
+      <span class="wins" id="wins-count">Wins: 0</span>
+      <span class="fails" id="fails-count">Learning: 0</span>
+    </div>
+    <div class="scroll-area" id="track-list"></div>
+  </div>
+
+  <!-- ── Motivate tab ── -->
+  <div class="tab" id="tab-motivate">
+    <div class="tab-header">Get Out There!</div>
+    <div class="scroll-area">
+      <div class="quote-card" id="quote-text"></div>
+      <button class="btn-full btn-primary" onclick="shuffleQuote()">Shuffle Inspiration</button>
+      <div class="section-title">Therapist's Corner</div>
+      <div class="therapy-card" id="therapy-text"></div>
+      <button class="btn-full btn-therapy" onclick="shuffleTherapy()">New Insight</button>
+    </div>
+  </div>
+
+  <!-- ── Settings tab ── -->
+  <div class="tab" id="tab-settings">
+    <div class="tab-header">Settings</div>
+    <div class="scroll-area">
+      <div class="card">
+        <div class="setting-label">AI Provider</div>
+        <div class="provider-btns" id="provider-btns"></div>
+        <div class="provider-hint" id="provider-hint"></div>
+        <input type="password" class="settings-input" id="api-key-input" placeholder="API Key">
+        <div class="save-row">
+          <button onclick="saveAndConnect()">Save & Connect</button>
+          <button class="save-only" onclick="saveKey()" title="Save locally">&#128190;</button>
+        </div>
+        <div class="status-msg" id="settings-status"></div>
+      </div>
+      <div class="card">
+        <div class="profiles-header">
+          <h3>Style Profiles</h3>
+          <button onclick="showCreateProfile()">&#10133;</button>
+        </div>
+        <div id="profile-cards"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── History tab ── -->
+  <div class="tab" id="tab-history">
+    <div class="tab-header">
+      <button onclick="switchTab('chat')" style="background:none;border:none;color:var(--primary);font-size:14px;cursor:pointer">&#8592; Back</button>
+      <span>Chat History</span>
+    </div>
+    <div class="scroll-area" id="history-list"></div>
+  </div>
+
+  <!-- ── Bottom nav ── -->
+  <nav class="bottom-nav">
+    <button class="active" onclick="switchTab('chat')" id="nav-chat">&#128172;<span>Chat</span></button>
+    <button onclick="switchTab('ice')" id="nav-ice">&#9889;<span>Openers</span></button>
+    <button onclick="switchTab('track')" id="nav-track">&#128200;<span>Track</span></button>
+    <button onclick="switchTab('motivate')" id="nav-motivate">&#128293;<span>Motivate</span></button>
+    <button onclick="switchTab('settings')" id="nav-settings">&#9881;<span>Settings</span></button>
+  </nav>
+
+  <div id="modal-root"></div>
+  <script src="/kindling/static/app.js"></script>
+</body>
+</html>

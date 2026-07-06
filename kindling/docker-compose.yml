@@ -1,0 +1,11 @@
+services:
+  kindling:
+    build: .
+    container_name: kindling
+    network_mode: host
+    volumes:
+      - kindling-data:/data
+    restart: unless-stopped
+
+volumes:
+  kindling-data:

@@ -60,7 +60,7 @@ def book_to_response(book: models.Book, user_book: Optional[models.UserBook], pr
         "title": book.title,
         "author": book.author,
         "isbn": book.isbn,
-        "cover_url": book.cover_url,
+        "cover_url": f"/bookworm{book.cover_url}" if book.cover_url else None,
         "file_type": book.file_type.value if hasattr(book.file_type, "value") else book.file_type,
         "total_pages": book.total_pages,
         "total_words": book.total_words,
