@@ -59,3 +59,4 @@ maintaining older Android apps.
 | TapLord   | 3090 | /taplord    |
 | CineQueue | 8100 | /cinequeue  |
 | Kindling  | 8200 | /kindling   |
+| ClearSpend| 8300 | /clearspend |

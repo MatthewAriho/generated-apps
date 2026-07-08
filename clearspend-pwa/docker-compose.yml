@@ -1,0 +1,12 @@
+services:
+  clearspend:
+    build: .
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - CLEARSPEND_DATA_DIR=/data
+    volumes:
+      - clearspend-data:/data
+
+volumes:
+  clearspend-data:

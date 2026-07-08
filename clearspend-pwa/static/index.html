@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#1a6b3c">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>ClearSpend</title>
+  <link rel="manifest" href="/clearspend/manifest.json">
+  <link rel="stylesheet" href="/clearspend/static/style.css">
+  <link rel="icon" href="/clearspend/static/icon-192.png">
+</head>
+<body>
+
+  <!-- ── Dashboard tab ── -->
+  <div class="tab active" id="tab-dash">
+    <div class="tab-header"><span>&#128176; ClearSpend</span></div>
+    <div class="scroll-area" id="dash-content">
+      <div class="empty-state"><div class="icon">&#128176;</div><div class="msg">Loading...</div></div>
+    </div>
+  </div>
+
+  <!-- ── Transactions tab ── -->
+  <div class="tab" id="tab-txns">
+    <div class="tab-header"><span>Transactions</span></div>
+    <div class="controls">
+      <select id="txn-month" onchange="loadTransactions()"></select>
+      <select id="txn-type" onchange="loadTransactions()">
+        <option value="">All Types</option>
+        <option value="expense">Expense</option>
+        <option value="income">Income</option>
+        <option value="transfer">Transfer</option>
+      </select>
+      <input type="text" id="txn-search" placeholder="Search..." oninput="debounceSearch()">
+    </div>
+    <div class="scroll-area" id="txn-list"></div>
+  </div>
+
+  <!-- ── Budget tab ── -->
+  <div class="tab" id="tab-budget">
+    <div class="tab-header">
+      <span>Budgets</span>
+      <div class="tab-header-actions"><button onclick="showAddBudget()" title="Add budget">&#10133;</button></div>
+    </div>
+    <div id="budget-month-nav"></div>
+    <div class="scroll-area" id="budget-content"></div>
+  </div>
+
+  <!-- ── Goals tab ── -->
+  <div class="tab" id="tab-goals">
+    <div class="tab-header">
+      <span>Goals</span>
+      <div class="tab-header-actions"><button onclick="showAddGoal()" title="Add goal">&#10133;</button></div>
+    </div>
+    <div class="scroll-area" id="goals-content"></div>
+  </div>
+
+  <!-- ── Trends tab ── -->
+  <div class="tab" id="tab-trends">
+    <div class="tab-header">Trends</div>
+    <div id="trends-month-nav"></div>
+    <div class="scroll-area" id="trends-content"></div>
+  </div>
+
+  <!-- ── Events tab ── -->
+  <div class="tab" id="tab-events">
+    <div class="tab-header">
+      <span>Events</span>
+      <div class="tab-header-actions"><button onclick="showAddEvent()" title="Add event">&#10133;</button></div>
+    </div>
+    <div class="scroll-area" id="events-content"></div>
+  </div>
+
+  <!-- ── Bank tab ── -->
+  <div class="tab" id="tab-bank">
+    <div class="tab-header">Bank Accounts</div>
+    <div class="scroll-area" id="bank-content"></div>
+  </div>
+
+  <!-- ── Settings tab ── -->
+  <div class="tab" id="tab-settings">
+    <div class="tab-header">Settings</div>
+    <div class="scroll-area" id="settings-content"></div>
+  </div>
+
+  <!-- ── FAB (add transaction) ── -->
+  <button class="fab" id="fab-add" onclick="showAddTransaction()" title="Add transaction">+</button>
+
+  <!-- ── Bottom nav (scrollable) ── -->
+  <nav class="bottom-nav">
+    <button class="active" onclick="switchTab('dash')" id="nav-dash">&#128200;<span>Home</span></button>
+    <button onclick="switchTab('txns')" id="nav-txns">&#128179;<span>Txns</span></button>
+    <button onclick="switchTab('budget')" id="nav-budget">&#127919;<span>Budget</span></button>
+    <button onclick="switchTab('goals')" id="nav-goals">&#127942;<span>Goals</span></button>
+    <button onclick="switchTab('trends')" id="nav-trends">&#128202;<span>Trends</span></button>
+    <button onclick="switchTab('events')" id="nav-events">&#128197;<span>Events</span></button>
+    <button onclick="switchTab('bank')" id="nav-bank">&#127974;<span>Bank</span></button>
+    <button onclick="switchTab('settings')" id="nav-settings">&#9881;<span>Settings</span></button>
+  </nav>
+
+  <div id="modal-root"></div>
+  <script src="/clearspend/static/app.js"></script>
+</body>
+</html>
