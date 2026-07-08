@@ -36,6 +36,10 @@ interface EpubReaderState {
   bookId: number;
   totalPages: number;
   locationsReady: boolean;
+  // Per-spine-item location counts, so chapter-based progress estimates are
+  // weighted by actual chapter length instead of treating every spine item
+  // (cover, copyright, 60-page chapter) as equal.
+  spineWeights: { counts: number[]; cum: number[]; total: number } | null;
   uiVisible: boolean;
   // Custom paginated mode state
   pageMode: {
@@ -74,7 +78,7 @@ const state: EpubReaderState = {
   sessionStart: new Date(), saveTimer: null, uiTimer: null,
   prefs: { theme: "light", fontSize: 100, margins: { ...DEFAULT_MARGINS }, readingMode: "scroll" },
   annotations: [], pendingCfi: null, pendingColor: null, pendingText: "",
-  bookId: 0, totalPages: 0, locationsReady: false, uiVisible: true,
+  bookId: 0, totalPages: 0, locationsReady: false, spineWeights: null, uiVisible: true,
   pageMode: { active: false, container: null, currentPage: 0, totalPageCount: 0, chapterIndex: 0, chapterHtml: "", columnWidth: 0 },
 };
 
@@ -82,7 +86,7 @@ const state: EpubReaderState = {
 
 export function renderEpubReader(_bookData: Book): string {
   return `
-    <div class="epub-container" id="epub-viewer"></div>
+    <div class="reader-epub-shell" id="epub-viewer"></div>
 
     <div class="reader-controls" id="reader-controls">
       <button class="reader-ctrl-btn" id="epub-prev-btn">&#8592;</button>
@@ -192,48 +196,49 @@ function savePrefs() {
   localStorage.setItem("bookworm_reader_prefs", JSON.stringify(state.prefs));
 }
 
-// ─── Iframe style injection ──────────────────────────────────────────────────
+// ─── epub.js theme ───────────────────────────────────────────────────────────
+// Registered on the rendition BEFORE display() so epub.js measures each
+// section WITH the theme applied. (Previously we injected a <style> into each
+// iframe on the "rendered" event — that reflowed content AFTER epub.js had
+// measured it, corrupting the manager's height/position map and causing the
+// blank-pages-then-jump behaviour.)
 
-function applyIframeStyles() {
-  if (!state.rendition) return;
-  const { theme, fontSize, margins } = state.prefs;
+function themeRules() {
+  const { theme, margins } = state.prefs;
   const t = THEMES[theme];
-  const css = `
-    html, body {
-      background: ${t.bg} !important;
-      margin: 0 !important;
-    }
-    body {
-      color: ${t.fg} !important;
-      font-size: ${fontSize}% !important;
-      line-height: 1.7 !important;
-      padding-top: ${margins.top}px !important;
-      padding-bottom: ${margins.bottom}px !important;
-      padding-left: ${margins.left}px !important;
-      padding-right: ${margins.right}px !important;
-      box-sizing: border-box !important;
-    }
-    * { max-width: 100%; box-sizing: border-box; }
-    h1,h2,h3,h4,h5,h6 { color: ${t.fg} !important; }
-    a { color: #6366f1 !important; }
-    .bw-highlight { cursor: pointer; }
-  `;
+  return {
+    "html, body": {
+      "background": `${t.bg} !important`,
+      "margin": "0 !important",
+    },
+    "body": {
+      "color": `${t.fg} !important`,
+      "line-height": "1.7 !important",
+      "padding-top": `${margins.top}px !important`,
+      "padding-bottom": `${margins.bottom}px !important`,
+      "padding-left": `${margins.left}px !important`,
+      "padding-right": `${margins.right}px !important`,
+      "box-sizing": "border-box !important",
+    },
+    "*": { "max-width": "100%", "box-sizing": "border-box" },
+    "h1,h2,h3,h4,h5,h6": { "color": `${t.fg} !important` },
+    "a": { "color": "#6366f1 !important" },
+    ".bw-highlight": { "cursor": "pointer" },
+  };
+}
+
+function applyRenditionTheme() {
+  if (!state.rendition) return;
+  const t = THEMES[state.prefs.theme];
   const container = document.getElementById("epub-viewer");
   if (container) container.style.background = t.containerBg;
   try {
-    state.rendition.getContents().forEach((c: any) => {
-      try {
-        const doc = c.document;
-        if (!doc) return;
-        let style = doc.getElementById("bw-custom-style");
-        if (!style) {
-          style = doc.createElement("style");
-          style.id = "bw-custom-style";
-          (doc.head ?? doc.documentElement).appendChild(style);
-        }
-        style.textContent = css;
-      } catch {}
-    });
+    // Re-registering under the same name replaces the rules; select() pushes
+    // the update into already-rendered contents. fontSize() goes through the
+    // themes pipeline too, so epub.js re-measures instead of drifting.
+    state.rendition.themes.register("bw", themeRules());
+    state.rendition.themes.select("bw");
+    state.rendition.themes.fontSize(`${state.prefs.fontSize}%`);
   } catch {}
 }
 
@@ -270,7 +275,7 @@ function syncSettingsUI() {
 
 function applyPrefs() {
   if (!state.rendition && !state.pageMode.active) return;
-  if (state.rendition) applyIframeStyles();
+  if (state.rendition) applyRenditionTheme();
   if (state.pageMode.active && state.pageMode.container) {
     const inner = state.pageMode.container.querySelector(".pages-inner") as HTMLElement;
     if (inner) {
@@ -284,31 +289,43 @@ function applyPrefs() {
 
 // ─── Progress ────────────────────────────────────────────────────────────────
 
-function calcProgress(_cfi: string, locationEvent: any): { pct: number; page: number | null } {
-  // Custom paginated mode — use our own page tracking
-  if (state.pageMode.active) {
-    const pm = state.pageMode;
-    const numSections = Math.max(1, (state.book?.spine?.spineItems ?? []).length);
-    const chapterFraction = pm.totalPageCount > 0 ? pm.currentPage / pm.totalPageCount : 0;
-    const globalProgress = (pm.chapterIndex + chapterFraction) / numSections;
-    const pct = Math.min(100, Math.round(globalProgress * 100));
-    const page = state.totalPages > 0
-      ? Math.max(1, Math.min(state.totalPages, Math.round(globalProgress * state.totalPages) + 1))
-      : null;
-    return { pct, page };
-  }
-
-  // Scrolled mode — spine + displayed page/total
+// Chapter index + fraction-within-chapter → global 0..1 progress.
+// Weighted by per-chapter location counts when available, else equal spine
+// weighting (the old behaviour, which made progress "jump to 1/3" on books
+// with few, unevenly sized spine items).
+function chapterProgress(chapterIndex: number, chapterFraction: number): number {
   const numSections = Math.max(1, (state.book?.spine?.spineItems ?? []).length);
-  const sIdx = locationEvent?.start?.index ?? 0;
-  const dp = locationEvent?.start?.displayed?.page ?? 1;
-  const dt = Math.max(1, locationEvent?.start?.displayed?.total ?? 1);
-  const spineProgress = (sIdx + dp / dt) / numSections;
+  const w = state.spineWeights;
+  if (w && w.counts[chapterIndex] != null) {
+    return (w.cum[chapterIndex] + chapterFraction * w.counts[chapterIndex]) / w.total;
+  }
+  return (chapterIndex + chapterFraction) / numSections;
+}
 
-  // Use event percentage when locations are ready and non-zero
-  const pct_event = locationEvent?.start?.percentage;
-  const useLocations = state.locationsReady && typeof pct_event === "number" && pct_event > 0;
-  const progress = useLocations ? pct_event : spineProgress;
+function calcProgress(_cfi: string, locationEvent: any): { pct: number; page: number | null } {
+  let progress: number;
+
+  if (state.pageMode.active) {
+    // Custom paginated mode — our own page tracking
+    const pm = state.pageMode;
+    const chapterFraction = pm.totalPageCount > 0 ? pm.currentPage / pm.totalPageCount : 0;
+    progress = chapterProgress(pm.chapterIndex, chapterFraction);
+  } else {
+    // Scrolled mode. NOTE: epub.js emits two location events with DIFFERENT
+    // payload shapes:
+    //   "relocated"       → { start: { cfi, index, displayed, percentage }, end: {...} }
+    //   "locationChanged" → { index, href, start: <cfi string>, end, percentage }
+    // We subscribe to "relocated", but read both shapes defensively.
+    const sIdx = locationEvent?.start?.index ?? locationEvent?.index ?? 0;
+    const dp = locationEvent?.start?.displayed?.page ?? 1;
+    const dt = Math.max(1, locationEvent?.start?.displayed?.total ?? 1);
+    const spineProgress = chapterProgress(sIdx, dp / dt);
+
+    // Prefer epub.js's own locations-based percentage once generate() is done
+    const pct_event = locationEvent?.start?.percentage ?? locationEvent?.percentage;
+    const useLocations = state.locationsReady && typeof pct_event === "number" && pct_event > 0;
+    progress = useLocations ? pct_event : spineProgress;
+  }
 
   const pct = Math.min(100, Math.round(progress * 100));
   const page = state.totalPages > 0
@@ -530,12 +547,31 @@ async function generateLocations() {
     await state.book.locations.generate(1024);
     state.totalPages = state.book.locations.length();
     state.locationsReady = true;
+    state.spineWeights = buildSpineWeights();
     console.log(`[epub] locations ready: ${state.totalPages} total`);
-    if (state.currentCfi) {
-      const { pct, page } = calcProgress(state.currentCfi, state.lastLocationEvent);
-      updateProgressDisplay(pct, page);
-    }
+    // Refresh the display now that we have real weights/percentages
+    const { pct, page } = calcProgress(state.currentCfi, state.lastLocationEvent);
+    updateProgressDisplay(pct, page);
   } catch (e) { console.warn("[epub] locations.generate failed:", e); }
+}
+
+// Count how many generated locations fall inside each spine item. Location
+// CFIs look like "epubcfi(/6/8[chap01]!/4/2/1:0)" and each spine item exposes
+// its cfiBase ("/6/8[chap01]"), so `cfiBase + "!"` is an unambiguous prefix key.
+function buildSpineWeights(): { counts: number[]; cum: number[]; total: number } | null {
+  try {
+    const locs: string[] = state.book?.locations?._locations ?? [];
+    const spineItems: any[] = state.book?.spine?.spineItems ?? [];
+    if (!locs.length || !spineItems.length) return null;
+    const counts = spineItems.map((s: any) => {
+      const key = `${s.cfiBase}!`;
+      return locs.reduce((n, l) => n + (l.includes(key) ? 1 : 0), 0);
+    });
+    const cum: number[] = [];
+    let running = 0;
+    for (const c of counts) { cum.push(running); running += c; }
+    return running > 0 ? { counts, cum, total: running } : null;
+  } catch { return null; }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -576,29 +612,34 @@ async function initCustomPaginated(bookData: Book, log: (msg: string) => void) {
 
   applyCustomPageStyles(inner);
 
-  // Determine starting chapter
+  // Determine starting chapter + page
   let startChapter = 0;
+  let startPage = 0;
   try {
     const saved = await progressApi.get(bookData.id);
     if (saved?.position) {
-      state.currentCfi = saved.position;
-      // Try to extract section index from CFI
-      const spineItems = state.book.spine?.spineItems ?? [];
-      for (let i = 0; i < spineItems.length; i++) {
-        try {
-          // Simple heuristic: try displaying and see which section the CFI belongs to
+      // Positions saved from pages mode: "chapter:X:page:Y"
+      const m = saved.position.match(/^chapter:(\d+):page:(\d+)$/);
+      if (m) {
+        startChapter = parseInt(m[1], 10);
+        startPage = parseInt(m[2], 10);
+      } else if (saved.position.startsWith("epubcfi(")) {
+        // Positions saved from scroll mode: a CFI — map it to a spine section
+        state.currentCfi = saved.position;
+        const spineItems = state.book.spine?.spineItems ?? [];
+        for (let i = 0; i < spineItems.length; i++) {
           const cfiBase = spineItems[i].cfiBase;
-          if (state.currentCfi.includes(cfiBase?.replace?.("!", "") ?? "__none__")) {
+          if (cfiBase && state.currentCfi.includes(`${cfiBase}!`)) {
             startChapter = i;
             break;
           }
-        } catch {}
+        }
       }
     }
   } catch {}
 
   state.pageMode.chapterIndex = startChapter;
-  await loadChapter(startChapter, log);
+  await loadChapter(startChapter, log, startPage);
 
   // Touch handling for custom pages — simple, no hacks needed
   let touchStartX = 0, touchStartY = 0, touchStartTime = 0;
@@ -659,7 +700,9 @@ async function initCustomPaginated(bookData: Book, log: (msg: string) => void) {
   log("Custom paginated mode ready");
 }
 
-async function loadChapter(index: number, log?: (msg: string) => void) {
+// initialPage: 0-based page within the chapter to land on; -1 means last page
+// (used when paging backwards across a chapter boundary).
+async function loadChapter(index: number, log?: (msg: string) => void, initialPage = 0) {
   const spineItems = state.book.spine?.spineItems ?? [];
   if (index < 0 || index >= spineItems.length) return;
 
@@ -703,13 +746,27 @@ async function loadChapter(index: number, log?: (msg: string) => void) {
     // Apply scoped CSS from epub
     await injectEpubStyles(inner, section);
 
+    // Images (blob URLs decode async) and web fonts finish loading AFTER the
+    // first column measurement, silently changing scrollWidth. Re-measure when
+    // they land — recalcCustomPages re-clamps currentPage, so stale counts no
+    // longer leave trailing blank pages.
+    const remeasure = () => recalcCustomPages();
+    inner.querySelectorAll("img").forEach(img => {
+      const im = img as HTMLImageElement;
+      if (!im.complete) im.addEventListener("load", remeasure, { once: true });
+    });
+    (document as any).fonts?.ready?.then?.(remeasure);
+
     // Calculate columns after content renders
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        recalcCustomPages();
         state.pageMode.currentPage = 0;
-        setCustomPage(0);
-        log?.(`Chapter loaded: ${state.pageMode.totalPageCount} pages`);
+        recalcCustomPages();
+        requestAnimationFrame(() => {
+          const last = Math.max(0, state.pageMode.totalPageCount - 1);
+          setCustomPage(initialPage < 0 ? last : Math.min(initialPage, last));
+          log?.(`Chapter loaded: ${state.pageMode.totalPageCount} pages`);
+        });
       });
     });
   } catch (e) {
@@ -768,7 +825,13 @@ function recalcCustomPages() {
   requestAnimationFrame(() => {
     const totalWidth = inner.scrollWidth;
     state.pageMode.totalPageCount = Math.max(1, Math.ceil(totalWidth / viewWidth));
-    updateCustomProgress();
+    // If content shrank (image sizing settled, font swap, margin change),
+    // pull the current page back into range instead of leaving a blank view.
+    if (state.pageMode.currentPage > state.pageMode.totalPageCount - 1) {
+      setCustomPage(state.pageMode.totalPageCount - 1);
+    } else {
+      updateCustomProgress();
+    }
   });
 }
 
@@ -802,17 +865,10 @@ function customPagePrev() {
   if (pm.currentPage > 0) {
     setCustomPage(pm.currentPage - 1);
   } else {
-    // Previous chapter — go to last page
+    // Previous chapter — land on its last page (-1 = last, resolved after
+    // the chapter's own column measurement, so no rAF race)
     if (pm.chapterIndex > 0) {
-      const prevIdx = pm.chapterIndex - 1;
-      loadChapter(prevIdx).then(() => {
-        // After chapter loads, jump to last page
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            setCustomPage(state.pageMode.totalPageCount - 1);
-          });
-        });
-      });
+      loadChapter(pm.chapterIndex - 1, undefined, -1);
     }
   }
   resetUiTimer();
@@ -847,8 +903,12 @@ function navigateToTocItem(href: string) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ─── OPTION A: Scrolled Mode (epub.js flow: "scrolled") ────────────────────
-// No overlay, no touch hacks. Native vertical scroll. Links just work.
+// ─── OPTION A: Scrolled Mode (epub.js flow: "scrolled-doc") ─────────────────
+// One spine section at a time, native vertical scroll within it, next()/prev()
+// cross chapter boundaries deterministically. Unlike flow:"scrolled" +
+// manager:"continuous", there are no lazily-loaded placeholder sections with
+// guessed heights — so no blank regions and no scroll-position remapping.
+// No overlay, no touch hacks. Links just work.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function initScrolledMode(bookData: Book, log: (msg: string) => void) {
@@ -859,10 +919,12 @@ async function initScrolledMode(bookData: Book, log: (msg: string) => void) {
     state.rendition = state.book.renderTo(container, {
       width: "100%",
       height: "100%",
-      flow: "scrolled",
-      manager: "continuous",
+      flow: "scrolled-doc",
     });
   } catch (e) { log(`ERROR: ${e}`); return; }
+
+  // Register the theme BEFORE display() so sections are measured with it.
+  applyRenditionTheme();
 
   const onFullscreenResize = () => {
     state.rendition?.resize?.(
@@ -872,15 +934,28 @@ async function initScrolledMode(bookData: Book, log: (msg: string) => void) {
   };
   document.addEventListener("fullscreenchange", onFullscreenResize);
 
-  // Restore saved position
+  // Restore saved position. Positions saved from "pages" mode use the
+  // "chapter:X:page:Y" format — map those to the spine section; only real
+  // CFIs go to display() directly.
+  let displayTarget: string | undefined;
   try {
     const saved = await progressApi.get(bookData.id);
-    if (saved?.position) state.currentCfi = saved.position;
+    if (saved?.position) {
+      if (saved.position.startsWith("epubcfi(")) {
+        state.currentCfi = saved.position;
+        displayTarget = saved.position;
+      } else {
+        const m = saved.position.match(/^chapter:(\d+):page:\d+$/);
+        const idx = m ? parseInt(m[1], 10) : NaN;
+        const section = state.book?.spine?.spineItems?.[idx];
+        if (section) displayTarget = section.href;
+      }
+    }
   } catch {}
 
   try {
     await Promise.race([
-      state.rendition.display(state.currentCfi || undefined),
+      state.rendition.display(displayTarget),
       new Promise((_, r) => setTimeout(() => r(new Error("display() timeout")), 20000)),
     ]);
     log("SUCCESS");
@@ -889,16 +964,35 @@ async function initScrolledMode(bookData: Book, log: (msg: string) => void) {
   applyPrefs();
   applyAnnotations();
 
-  // ── Re-apply styles on every page render ──
+  // ── Re-apply annotations on every section render ──
+  // (Theme is handled by the themes API now — injecting styles here reflowed
+  // content after epub.js had measured it, which broke scroll positioning.)
   state.rendition.on("rendered", () => {
-    applyIframeStyles();
     applyAnnotations();
   });
 
+  // ── Tap anywhere (non-link, no selection) toggles the toolbar/controls ──
+  // epub.js relays click events from inside its iframes onto the rendition,
+  // so no overlay is needed and links keep working.
+  state.rendition.on("click", (e: MouseEvent) => {
+    try {
+      if ((e.target as HTMLElement)?.closest?.("a")) return;
+      const sel = state.rendition?.getContents?.()[0]?.window?.getSelection?.()?.toString?.() ?? "";
+      if (sel) return;
+    } catch {}
+    if (state.uiVisible) hideUI(); else showUI();
+  });
+
   // ── Progress tracking ──
+  // IMPORTANT: use "relocated", NOT "locationChanged". Both fire from
+  // reportLocation(), but "locationChanged" has a flat payload where `start`
+  // is a CFI *string* — reading `location.start.cfi` off it yields undefined,
+  // which is why progress was stuck and saves never fired (currentCfi was
+  // always ""). "relocated" carries the full location object.
   let saveDebounce: ReturnType<typeof setTimeout> | null = null;
-  state.rendition.on("locationChanged", (location: any) => {
-    const cfi = location?.start?.cfi ?? "";
+  state.rendition.on("relocated", (location: any) => {
+    const cfi = location?.start?.cfi
+      ?? (typeof location?.start === "string" ? location.start : "");
     state.currentCfi = cfi;
     state.lastLocationEvent = location;
     const { pct, page } = calcProgress(cfi, location);
@@ -956,6 +1050,7 @@ export async function initEpubReader(bookData: Book, onStatus?: (msg: string) =>
   state.bookId = bookData.id;
   state.totalPages = 0;
   state.locationsReady = false;
+  state.spineWeights = null;
   state.prefs = loadPrefs();
   state.pageMode = { active: false, container: null, currentPage: 0, totalPageCount: 0, chapterIndex: 0, chapterHtml: "", columnWidth: 0 };
   loadAnnotations();
@@ -1076,9 +1171,16 @@ export async function initEpubReader(bookData: Book, onStatus?: (msg: string) =>
     const pct = parseFloat(pctInput.value.replace("%","").trim());
     if (!isNaN(pct) && pct >= 0 && pct <= 100) {
       if (state.pageMode.active) {
-        // Jump to approximate chapter + page in custom mode
+        // Jump to approximate chapter in custom mode (length-weighted when
+        // locations are ready, equal spine split otherwise)
         const spineItems = state.book.spine?.spineItems ?? [];
-        const targetChapter = Math.floor((pct / 100) * spineItems.length);
+        let targetChapter = Math.floor((pct / 100) * spineItems.length);
+        const w = state.spineWeights;
+        if (w) {
+          const targetLoc = (pct / 100) * w.total;
+          targetChapter = 0;
+          for (let i = 0; i < w.cum.length; i++) if (w.cum[i] <= targetLoc) targetChapter = i;
+        }
         loadChapter(Math.min(targetChapter, spineItems.length - 1));
       } else if (state.locationsReady) {
         const cfi = state.book.locations.cfiFromPercentage(pct / 100);

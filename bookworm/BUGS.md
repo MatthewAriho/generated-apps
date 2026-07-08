@@ -1,4 +1,177 @@
-# Bookworm — Known Bugs (Phase 3 Backlog)
+# Bookworm — Reader Bugs
+
+> **Status: RESOLVED in v22.** All four reader bugs traced to a single upstream
+> root cause (wrong epub.js event payload shape) plus a handful of secondary
+> issues. The full v1–v21 attempt history is preserved below under
+> "Historical Analysis & Attempts" — most of it was fighting downstream damage
+> from the root cause and is kept as a record of what was tried and why the
+> conclusions were wrong.
+
+---
+
+## Current Fix Implementation (v22)
+
+### Root cause: wrong epub.js event / payload shape
+
+`initScrolledMode` subscribed to `rendition.on("locationChanged", ...)` but
+read the payload as if it were the `relocated` payload.
+
+In epub.js 0.3.x, `reportLocation()` emits **two** events with **different
+shapes**:
+
+| Event | Payload |
+|-------|---------|
+| `locationChanged` | flat: `{ index, href, start, end, percentage }` — `start`/`end` are CFI **strings**, `percentage` is top-level |
+| `relocated` | full location object: `{ start: { cfi, index, href, displayed: {page,total}, percentage, location }, end: {...} }` |
+
+The handler read `location.start.cfi`, `location.start.displayed`, and
+`location.start.percentage` off the **flat** payload — all `undefined`, always.
+
+Cascade:
+
+1. **`state.currentCfi` stayed `""` forever** → `saveProgress()` early-returned
+   → nothing persisted to the backend → resume + library progress indicators dead.
+2. **`calcProgress` degenerated to a constant**: `index → 0`, `displayed → 1/1`,
+   so progress = `1/numSections` on every event (Bug #2, "stuck at 0%").
+3. **The locations machinery was fine all along.** The historical conclusion
+   that "`percentageFromCfi()` binary search is unreliable / returns 0" was a
+   misdiagnosis: it was being fed `""`/undefined CFIs. Same for
+   "`location.start.percentage` still returns 0 after `generate()`" — that
+   field doesn't exist on the `locationChanged` payload.
+
+### Fixes implemented (all in `frontend/src/components/ReaderEpub.ts` unless noted)
+
+**1. Subscribe to `relocated` (fixes Bug #2 + saving/resume)**
+The progress handler now listens to `relocated` and extracts the CFI
+defensively so either payload shape works:
+
+```typescript
+state.rendition.on("relocated", (location: any) => {
+  const cfi = location?.start?.cfi
+    ?? (typeof location?.start === "string" ? location.start : "");
+  ...
+});
+```
+
+`calcProgress` likewise reads `start.index ?? index` and
+`start.percentage ?? percentage`, tolerating both shapes.
+
+**2. Tap-to-toggle UI via epub.js click relay (fixes Bug #1)**
+Scroll mode previously had **no tap handler at all** — `showUI`/`hideUI` were
+only wired in the custom paginated path, so after the 3s auto-hide the toolbar
+was unreachable. epub.js relays click events from inside its iframes onto the
+rendition, so no overlay is needed and links keep working:
+
+```typescript
+state.rendition.on("click", (e: MouseEvent) => {
+  if ((e.target as HTMLElement)?.closest?.("a")) return;   // links work
+  if (/* active text selection */) return;                  // don't toggle mid-select
+  if (state.uiVisible) hideUI(); else showUI();
+});
+```
+
+**3. Themes API instead of post-render style injection (fixes the jump)**
+`applyIframeStyles` (injected a `<style>` into each iframe on the `rendered`
+event — i.e. AFTER epub.js measured the section, reflowing content under the
+manager and corrupting its position map) is replaced by
+`themeRules()` + `applyRenditionTheme()`, registered **before** `display()`:
+
+```typescript
+rendition.themes.register("bw", themeRules());
+rendition.themes.select("bw");
+rendition.themes.fontSize(`${state.prefs.fontSize}%`);
+```
+
+Pref changes go through the same API, so epub.js re-measures properly. The
+`rendered` handler now only re-applies annotations.
+
+**4. `flow: "scrolled-doc"` replaces `scrolled` + `continuous` (fixes Bug #4)**
+The continuous manager lazily loads sections into placeholder views with
+guessed heights — scrolling into unloaded territory shows blank space, and
+loading remaps the scroll position (the "blank pages then jump" symptom).
+`scrolled-doc` uses the default manager: one section at a time, native
+vertical scroll within it, deterministic `next()`/`prev()` across chapters.
+The blank/remap failure class is structurally impossible. Trade-off: chapter
+boundaries require next/prev instead of one infinite scroll (Apple Books
+scroll mode behaves the same way).
+
+**5. Spine-weighted progress (fixes the "jump to ~1/3" magnitude)**
+Equal-weight spine progress (`chapterIndex / numSections`) jumps wildly on
+books with few, unevenly sized spine items. After `locations.generate()`,
+`buildSpineWeights()` counts locations per spine item by prefix-matching
+location CFIs against `spineItem.cfiBase + "!"`, giving `state.spineWeights =
+{ counts, cum, total }`. `chapterProgress()` uses it in both reading modes and
+in the %-jump input; falls back to equal weighting before locations are ready.
+
+**6. Pages mode: re-measure on async image/font load (fixes trailing blanks)**
+`totalPageCount` was measured before blob-URL images decoded and web fonts
+loaded, going stale. `loadChapter` now re-runs `recalcCustomPages()` on each
+`img.load` and on `document.fonts.ready`; `recalcCustomPages` clamps
+`currentPage` back into range when content shrinks.
+
+**7. Pages mode: `loadChapter(index, log?, initialPage)` (fixes back-nav race)**
+"Previous chapter, last page" used a double-rAF after `loadChapter()` resolved,
+racing `loadChapter`'s own internal rAFs. `initialPage = -1` now means "last
+page", resolved after the chapter's own column measurement.
+
+**8. Position format round-tripping between modes**
+Pages mode saves `chapter:X:page:Y`; scroll mode saves a CFI. Each mode now
+parses both on restore (scroll maps `chapter:X` → spine href; pages maps a CFI
+→ spine index via `cfiBase + "!"` prefix match) instead of feeding the wrong
+format to `display()`.
+
+**9. CSS class collision (hazard fix, `frontend/src/styles/reader.css`)**
+epub.js's internal scroll container is literally `class="epub-container"` —
+the same class the app used for its outer shell, leaking shell CSS
+(`position:absolute; inset:0; overflow:hidden`, iframe sizing) into epub.js's
+layout. Outer shell renamed to `.reader-epub-shell`; the remaining
+`.epub-container iframe { border:none }` rule now intentionally targets
+epub.js internals only. Dead `.epub-container.scrolled-mode` rule removed
+(the class was never added anywhere).
+
+### Bug → fix map
+
+| Bug | Fix(es) |
+|-----|---------|
+| #1 Center tap doesn't open menu | 2 |
+| #2 Progress never updates / never saves | 1, 5 |
+| #3 Internal epub links not working | 2 (no overlay anywhere; links reach the iframe natively) |
+| #4 Blank pages, then jump ~1/3 into book | 3, 4 (blanks/jump), 5 (the "1/3" magnitude), 6 (pages-mode flavor) |
+
+### Deploy smoke test
+
+1. Scroll mode: percentage moves while scrolling and survives a reload (fix 1 + saves).
+2. Tap mid-page → toolbar toggles; tapping a footnote/TOC link still navigates (fix 2).
+3. Change font size mid-chapter → no position jump (fix 3).
+4. `next()` through 15+ sections → no blank views (fix 4).
+5. Pages mode on an image-heavy chapter → page to the end, no trailing blanks (fix 6).
+
+### Known limitations / follow-ups
+
+- Scroll mode is chapter-by-chapter (`scrolled-doc`); no infinite scroll.
+- Pages-mode %-jump lands on chapter starts, not exact pages.
+- `spineWeights` build is O(spine × locations) — negligible at 1024-char
+  granularity; revisit below ~256.
+- Regression tests to add in `/workspace/tests/`: feed both event payload
+  shapes into `calcProgress`; spine-weight math; `chapter:X:page:Y` ↔ CFI
+  restore round-trip.
+- `relocated` payload shape was asserted from epub.js 0.3.x source knowledge,
+  not re-verified against the installed 0.3.93. The dual-shape defensive read
+  covers either case; if progress ever stalls again, log the raw payload in
+  the handler first.
+
+---
+
+# Historical Analysis & Attempts (v1–v21) — superseded
+
+> Preserved verbatim for the record. Key corrections in hindsight:
+> the "CFI binary search unreliable" conclusion (Bug #2) and "still returns 0
+> after generate()" observations were artifacts of reading the wrong event
+> payload — the CFIs being compared were empty strings. The overlay (Bug #1
+> "fix") and its cascade (#3, #4) were treating symptoms of the same issue,
+> since programmatic navigation *appeared* broken only because progress state
+> never updated. The Option A/B/C rework analysis below remains sound and was
+> largely adopted (A as `scrolled-doc` rather than `scrolled`+`continuous`).
 
 ## 1. Center Tap Causes Backward Page Navigation (CRITICAL)
 

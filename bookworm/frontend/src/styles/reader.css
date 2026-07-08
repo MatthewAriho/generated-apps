@@ -67,18 +67,15 @@ body.reading-mode .page-content { padding: 0 !important; max-width: none !import
   white-space: nowrap;
 }
 
-/* ===== Epub Container ===== */
-.epub-container {
+/* ===== Epub Container =====
+   NOTE: the outer shell is .reader-epub-shell, NOT .epub-container —
+   epub.js's own internal scroll container uses class "epub-container",
+   so styling that name here leaks rules into epub.js's layout. */
+.reader-epub-shell {
   position: absolute;
   inset: 0;
   overflow: hidden;
   background: var(--bg, #1a1a2e);
-}
-
-.epub-container iframe {
-  border: none;
-  width: 100%;
-  height: 100%;
 }
 
 /* ===== PDF Container ===== */
@@ -234,8 +231,8 @@ body.reading-mode .page-content { padding: 0 !important; max-width: none !import
 .epub-nav-prev { left: 0; background: linear-gradient(to right, rgba(26,26,46,0.8), transparent); }
 .epub-nav-next { right: 0; background: linear-gradient(to left, rgba(26,26,46,0.8), transparent); }
 
-.epub-container:hover .epub-nav-prev,
-.epub-container:hover .epub-nav-next {
+.reader-epub-shell:hover .epub-nav-prev,
+.reader-epub-shell:hover .epub-nav-next {
   opacity: 1;
 }
 
@@ -647,13 +644,8 @@ body.reading-mode .page-content { padding: 0 !important; max-width: none !import
 }
 
 /* ===== Scrolled Mode adjustments ===== */
+/* This targets epub.js's INTERNAL container (it names it .epub-container).
+   Do not add sizing rules here — epub.js manages iframe dimensions inline. */
 .epub-container iframe {
   border: none;
-}
-
-/* In scrolled mode, the epub.js continuous manager creates scrollable content.
-   Make sure the container allows it. */
-.epub-container.scrolled-mode {
-  overflow-y: auto !important;
-  -webkit-overflow-scrolling: touch;
 }
